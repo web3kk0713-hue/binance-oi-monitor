@@ -52,6 +52,18 @@ function unpack<T>(response: Envelope<T>): T {
   return response.data;
 }
 function chunks<T>(array: T[], size: number): T[][] { return Array.from({ length: Math.ceil(array.length / size) }, (_, i) => array.slice(i * size, (i + 1) * size)); }
+function geckoMarketUrl(ids: string[]): string { return `${CG}/coins/markets?vs_currency=usd&ids=${ids.map(encodeURIComponent).join(',')}&per_page=${ids.length}&page=1&sparkline=false`; }
+function geckoBatches(ids: string[]): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  for (const id of ids) {
+    // Bound both response size and URL length; some browser/network intermediaries reject long URLs.
+    if (batch.length && (batch.length >= 100 || geckoMarketUrl([...batch, id]).length > 1800)) { batches.push(batch); batch = []; }
+    batch.push(id);
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
 function dedupe(values: string[]): string[] { return [...new Set(values)]; }
 function stamp(url: string, observedAt: number, sourceTime: number | null): SourceStamp { return { provider: 'Binance', url, observedAt, sourceTime }; }
 function cmcUsdPrice(quote: CmcQuote['quote']): number | null {
@@ -61,8 +73,10 @@ function cmcUsdPrice(quote: CmcQuote['quote']): number | null {
 
 export function createCollector(options: CollectorOptions = {}): Collector {
   const mode = options.mode ?? 'direct';
-  // Keys are supported only by the server runtime. A browser cannot opt into secret-bearing requests.
-  const key = mode === 'server' && typeof window === 'undefined' ? options.cmcApiKey : undefined;
+  // CMC's public gateway does not support browser CORS. Neither it nor secret-bearing
+  // endpoints may be requested in direct mode, even when a caller supplies a key.
+  const useCmc = mode === 'server' && typeof window === 'undefined';
+  const key = useCmc ? options.cmcApiKey : undefined;
   const requestedConcurrency = Number.isFinite(options.concurrency) ? Math.floor(options.concurrency!) : 6;
   const request = createSourceClient(options.fetcher ?? fetch, Math.max(1, Math.min(6, requestedConcurrency)));
   let universe: Cached<Contract[]> | undefined;
@@ -79,6 +93,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     if (row.mappingStatus !== 'verified' || !evidence || !decimal(evidence.providerPriceUsd) || !fresh(evidence.updatedAt, Date.now(), SUPPLY_MAX_AGE) || !fresh(evidence.fetchedAt, Date.now(), SUPPLY_MAX_AGE)) continue;
     if (!['CoinMarketCap', 'CoinGecko'].includes(evidence.provider) || !/^[a-zA-Z0-9_-]+$/.test(evidence.id)) continue;
     const isCmc = evidence.provider === 'CoinMarketCap';
+    if (isCmc && !useCmc) continue;
     if (isCmc && (!/^\d+$/.test(evidence.id) || Number(evidence.id) <= 0)) continue;
     const override = IDENTITY_OVERRIDES[row.symbol];
     // Earlier builds attempted to bridge providers by slug. Such cached CMC IDs are untrusted.
@@ -114,6 +129,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     const cmcPrefix = key ? CMC : `${CMC}/public-api`;
 
     try {
+      if ([...groups.keys()].some(base => !IDENTITY_OVERRIDES[base])) {
       if (!geckoMapping || Date.now() - geckoMapping.fetchedAt >= 24 * SUPPLY_REFRESH) {
         const result = await request<{ tickers: GeckoTicker[] }>(CG_MAPPING_URL, signal);
         if (!Array.isArray(result.tickers)) throw new Error('COINGECKO_MAPPING_INVALID');
@@ -125,15 +141,17 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         const ids = new Set(ticks.map(t => t.coin_id!));
         if (ids.size !== 1) continue;
         const providerId = [...ids][0]!;
+        if (!/^[a-zA-Z0-9_-]+$/.test(providerId)) continue;
         const alias = UNIT_ALIASES[base];
         if (alias && !alias.acceptedGeckoIds.includes(providerId)) continue;
         identities.set(base, { symbol: alias?.symbol ?? base, geckoId: alias?.geckoId ?? providerId, multiplier: alias?.multiplier ?? 1, url: CG_MAPPING_URL, mapping: `CoinGecko Binance 合约 ${ticks.map(t => t.symbol).join(',')} → ${providerId}${alias ? ` → ${alias.geckoId}; 单位倍率 ${alias.multiplier}; ${alias.evidence}` : ''}` });
+      }
       }
     } catch (error) { problems.push(`COINGECKO_IDENTITY: ${message(error)}`); }
 
     // Provider slugs and symbols are not global identities. Only reviewed native-token or
     // contract-address mappings may authorize a CMC ID; all other supply stays within CoinGecko.
-    try {
+    if (useCmc) try {
       const needed = [...new Set([...groups.keys()].flatMap(base => {
         const id = identities.get(base)?.cmcId;
         const cached = id == null ? undefined : supplies.get(`cmc:${id}`);
@@ -153,12 +171,12 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     // A fallback changes only the supply provider, never the max-supply FDV formula or Binance OI.
     const missing = [...new Set([...groups.keys()].flatMap(base => {
       const identity = identities.get(base);
-      const preferred = identity?.cmcId == null ? undefined : supplies.get(`cmc:${identity.cmcId}`);
+      const preferred = !useCmc || identity?.cmcId == null ? undefined : supplies.get(`cmc:${identity.cmcId}`);
       const fallback = identity?.geckoId ? supplies.get(`cg:${identity.geckoId}`) : undefined;
       return identity?.geckoId && (!preferred || !supplyFresh(preferred)) && (!fallback || Date.now() - fallback.evidence.fetchedAt >= SUPPLY_REFRESH) ? [identity.geckoId] : [];
     }))];
-    for (const ids of chunks(missing, 200)) {
-      const url = `${CG}/coins/markets?vs_currency=usd&ids=${ids.join(',')}&per_page=250&page=1&sparkline=false`;
+    for (const ids of geckoBatches(missing)) {
+      const url = geckoMarketUrl(ids);
       try {
         const rows = await request<GeckoMarket[]>(url, signal);
         if (!Array.isArray(rows)) throw new Error('COINGECKO_SUPPLY_INVALID');
@@ -166,6 +184,9 @@ export function createCollector(options: CollectorOptions = {}): Collector {
           if (!ids.includes(row.id)) continue;
           supplies.set(`cg:${row.id}`, { symbol: row.symbol.toUpperCase(), name: row.name, evidence: { provider: 'CoinGecko', id: row.id, circulating: supplyNumber(row.circulating_supply), total: supplyNumber(row.total_supply), max: supplyNumber(row.max_supply), providerPriceUsd: finite(decimal(row.current_price)), updatedAt: iso(row.last_updated), fetchedAt: Date.now(), url } });
         }
+        const returned = new Set(rows.map(row => row.id));
+        const absent = ids.filter(id => !returned.has(id));
+        if (absent.length) problems.push(`COINGECKO_SUPPLY_PARTIAL: ${absent.length}/${ids.length} 个请求的资产未返回供应量，下轮仅补取缺失项`);
       } catch (error) { problems.push(`COINGECKO_SUPPLY: ${message(error)}`); break; }
     }
     if (problems.length === 0) nextSupplyAttempt = Date.now() + SUPPLY_REFRESH;
@@ -177,7 +198,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     return fresh(supply.evidence.updatedAt, Date.now(), SUPPLY_MAX_AGE) && fresh(supply.evidence.fetchedAt, Date.now(), SUPPLY_MAX_AGE);
   }
   function selectSupply(identity: Identity | undefined): Supply | undefined {
-    const primary = identity?.cmcId == null ? undefined : supplies.get(`cmc:${identity.cmcId}`);
+    const primary = !useCmc || identity?.cmcId == null ? undefined : supplies.get(`cmc:${identity.cmcId}`);
     const fallback = identity?.geckoId ? supplies.get(`cg:${identity.geckoId}`) : undefined;
     return primary && supplyFresh(primary) ? primary : fallback && supplyFresh(fallback) ? fallback : primary ?? fallback;
   }

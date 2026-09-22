@@ -63,13 +63,50 @@ function fixture(options: FixtureOptions = {}) {
   return { fetcher, calls };
 }
 
-afterEach(() => { vi.useRealTimers(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('official-source collector contract (fictional test fixtures)', () => {
   it('accepts the CMC public gateway string success code observed in live responses', async () => {
-    const row = (await createCollector({ fetcher: fixture({ cmcSuccessCode: '0' }).fetcher }).collect()).assets[0]!;
+    const row = (await createCollector({ mode: 'server', fetcher: fixture({ cmcSuccessCode: '0' }).fetcher }).collect()).assets[0]!;
     expect(row.supplySource).toBe('CoinMarketCap');
     expect(row.alertEligible).toBe(true);
+  });
+  it('never requests CMC from direct mode, including reviewed IDs and an accidentally supplied key', async () => {
+    const f = fixture();
+    const row = (await createCollector({ mode: 'direct', cmcApiKey: 'fictional-test-key', fetcher: f.fetcher }).collect()).assets[0]!;
+    expect(row.supplySource).toBe('CoinGecko');
+    expect(row.evidence.supply?.id).toBe('bitcoin');
+    expect(f.calls.some(url => url.includes('coinmarketcap'))).toBe(false);
+    expect(f.calls.some(url => url.includes('/derivatives/'))).toBe(false);
+  });
+
+  it('cannot opt into CMC requests by passing server mode inside a browser', async () => {
+    vi.stubGlobal('window', {});
+    const f = fixture();
+    const row = (await createCollector({ mode: 'server', cmcApiKey: 'fictional-test-key', fetcher: f.fetcher }).collect()).assets[0]!;
+    expect(row.supplySource).toBe('CoinGecko');
+    expect(f.calls.some(url => url.includes('coinmarketcap'))).toBe(false);
+  });
+
+  it.each([false, true])('replaces a server CMC snapshot with independently fetched CG evidence, without relabeling it (failure=%s)', async failure => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const initial = await createCollector({ mode: 'server', fetcher: fixture().fetcher }).collect();
+    expect(initial.assets[0]!.supplySource).toBe('CoinMarketCap');
+    const originalTime = initial.assets[0]!.supplyUpdatedAt;
+    vi.setSystemTime(Date.now() + 61_000);
+    const f = fixture({ cg429: failure, supplyAge: 20_000 });
+    const row = (await createCollector({ mode: 'direct', initialSnapshot: initial, fetcher: f.fetcher }).collect()).assets[0]!;
+    expect(f.calls.some(url => url.includes('coinmarketcap'))).toBe(false);
+    if (failure) {
+      expect(row.evidence.supply).toBeNull();
+      expect(row.supplySource).toBeNull();
+      expect(row.alertEligible).toBe(false);
+    } else {
+      expect(row.evidence.supply?.provider).toBe('CoinGecko');
+      expect(row.supplyUpdatedAt).toBe(Date.now() - 20_000);
+      expect(row.supplyUpdatedAt).not.toBe(originalTime);
+      expect(row.alertEligible).toBe(true);
+    }
   });
   it('aggregates two quote contracts with actual FX and never doubles OI for long/short sides', async () => {
     const f = fixture({ contracts: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT' }, { symbol: 'BTCUSDC', baseAsset: 'BTC', quoteAsset: 'USDC' }], oi: { BTCUSDT: '10', BTCUSDC: '5' } });
@@ -124,7 +161,7 @@ describe('official-source collector contract (fictional test fixtures)', () => {
   it('falls back on CMC 429 while honoring its Retry-After and retaining source provenance', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const f = fixture({ cmc429: true });
-    const collector = createCollector({ fetcher: f.fetcher });
+    const collector = createCollector({ mode: 'server', fetcher: f.fetcher });
     const first = await collector.collect();
     expect(first.assets[0]!.supplySource).toBe('CoinGecko');
     expect(first.assets[0]!.alertEligible).toBe(true);
@@ -181,6 +218,63 @@ describe('official-source collector contract (fictional test fixtures)', () => {
     expect(second.assets[0]!.supplyUpdatedAt).toBe(first.assets[0]!.supplyUpdatedAt);
     expect(second.assets[0]!.alertEligible).toBe(true);
     expect(secondFixture.calls.some(url => !url.includes('binance.com'))).toBe(false);
+  });
+
+  it('bounds CG request URLs and batch sizes, and retries only missing batches without touching successful evidence', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const contracts = Array.from({ length: 205 }, (_, index) => ({ symbol: `TEST${index}USDT`, baseAsset: `TEST${index}`, quoteAsset: 'USDT' }));
+    const tokens = contracts.map((contract, index) => ({ ...contract, id: `test-token-with-a-deliberately-long-slug-${index}` }));
+    const f = fixture({ contracts });
+    const marketCalls: string[] = [];
+    let failSecondBatch = true;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes('/derivatives/exchanges/')) return Response.json({ tickers: tokens.map(token => ({ symbol: token.symbol, base: token.baseAsset, target: token.quoteAsset, coin_id: token.id, contract_type: 'perpetual' })) });
+      if (url.pathname.endsWith('/coins/markets')) {
+        marketCalls.push(url.href);
+        if (failSecondBatch && marketCalls.length === 2) return new Response('temporary unavailable', { status: 503 });
+        const ids = url.searchParams.get('ids')!.split(',');
+        return Response.json(tokens.filter(token => ids.includes(token.id)).map(token => ({ id: token.id, symbol: token.baseAsset.toLowerCase(), name: token.baseAsset, current_price: 20000, circulating_supply: 20000000, max_supply: 21000000, total_supply: 20000000, last_updated: new Date().toISOString() })));
+      }
+      return f.fetcher(input, init);
+    };
+    const collector = createCollector({ mode: 'direct', fetcher });
+    const first = await collector.collect();
+    expect(marketCalls).toHaveLength(2);
+    const firstSuccess = new Set(new URL(marketCalls[0]!).searchParams.get('ids')!.split(','));
+    expect(first.coverage.marketCap).toBe(firstSuccess.size);
+    const firstEvidence = first.assets.filter(row => row.evidence.supply).map(row => ({ id: row.id, evidence: row.evidence.supply }));
+    failSecondBatch = false;
+    vi.setSystemTime(Date.now() + 61_000);
+    const second = await collector.collect();
+    expect(second.coverage.marketCap).toBe(205);
+    expect(second.coverage.eligible).toBe(205);
+    for (const call of marketCalls) {
+      const parsed = new URL(call);
+      const ids = parsed.searchParams.get('ids')!.split(',');
+      expect(ids.length).toBeLessThanOrEqual(100);
+      expect(call.length).toBeLessThanOrEqual(1800);
+      expect(Number(parsed.searchParams.get('per_page'))).toBe(ids.length);
+    }
+    const retriedIds = marketCalls.slice(2).flatMap(call => new URL(call).searchParams.get('ids')!.split(','));
+    expect(retriedIds.some(id => firstSuccess.has(id))).toBe(false);
+    for (const cached of firstEvidence) expect(second.assets.find(row => row.id === cached.id)!.evidence.supply).toEqual(cached.evidence);
+  });
+
+  it('retries a provider-omitted ID next minute instead of treating a partial response as an hourly success', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const f = fixture();
+    let omit = true;
+    const fetcher: typeof fetch = async (input, init) => new URL(String(input)).pathname.endsWith('/coins/markets') && omit ? Response.json([]) : f.fetcher(input, init);
+    const collector = createCollector({ mode: 'direct', fetcher });
+    const first = await collector.collect();
+    expect(first.coverage.marketCap).toBe(0);
+    expect(first.errors.some(error => error.includes('COINGECKO_SUPPLY_PARTIAL'))).toBe(true);
+    omit = false;
+    vi.setSystemTime(Date.now() + 61_000);
+    const second = await collector.collect();
+    expect(second.coverage.marketCap).toBe(1);
+    expect(second.assets[0]!.alertEligible).toBe(true);
   });
 
   it('rejects a same-symbol but wrong underlying asset reported by the derivative identity source', async () => {
