@@ -1,4 +1,5 @@
 import type { AlertEvent, AlertState, HistoryPoint, Snapshot, Thresholds } from '../src/shared/types';
+import { toHistoryPoint } from '../src/shared/history';
 import type { Database, SqlSession, SqlValue } from './database';
 
 export interface StoredSubscription {
@@ -36,7 +37,15 @@ export class MonitorStore {
       `CREATE TABLE IF NOT EXISTS monitor_lease (id TEXT PRIMARY KEY, owner TEXT NOT NULL,
         expires_at BIGINT NOT NULL, last_completed_slot BIGINT NOT NULL)`,
     ];
-    await this.db.transaction(async session => { for (const sql of statements) await session.query(sql); });
+    await this.db.transaction(async session => {
+      for (const sql of statements) await session.query(sql);
+      // Additive migration: retain old raw values, but do not certify their unknown supply freshness.
+      if (this.db.kind === 'postgresql') await session.query('ALTER TABLE monitor_history ADD COLUMN IF NOT EXISTS validated INTEGER NOT NULL DEFAULT 0');
+      else {
+        const columns = await session.query('PRAGMA table_info(monitor_history)');
+        if (!columns.rows.some(column => column.name === 'validated')) await session.query('ALTER TABLE monitor_history ADD COLUMN validated INTEGER NOT NULL DEFAULT 0');
+      }
+    });
   }
   async latest(): Promise<Snapshot | null> {
     const result = await this.db.query('SELECT payload FROM monitor_latest WHERE id=1');
@@ -62,19 +71,19 @@ export class MonitorStore {
     await this.db.transaction(async session => {
       await session.query(`INSERT INTO monitor_latest(id,payload,as_of) VALUES(1,$1,$2)
         ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,as_of=excluded.as_of`, [JSON.stringify(snapshot), snapshot.asOf]);
-      const timestamp = Math.floor(snapshot.asOf / 60_000) * 60_000;
       // Chunking keeps both PostgreSQL and SQLite below their parameter limits.
       for (let offset = 0; offset < snapshot.assets.length; offset += 200) {
         const values: SqlValue[] = [];
         const rows = snapshot.assets.slice(offset, offset + 200).map(asset => {
           const first = values.length + 1;
-          values.push(asset.id, timestamp, asset.oiUsd, asset.marketCapUsd, asset.fdvUsd, asset.oiToFdv, asset.oiToMarketCap, asset.complete ? 1 : 0);
-          return `(${Array.from({ length: 8 }, (_, i) => `$${first + i}`).join(',')})`;
+          const point = toHistoryPoint(asset, snapshot);
+          values.push(point.assetId, point.timestamp, point.oiUsd, point.marketCapUsd, point.fdvUsd, point.oiToFdv, point.oiToMarketCap, point.complete ? 1 : 0, 1);
+          return `(${Array.from({ length: 9 }, (_, i) => `$${first + i}`).join(',')})`;
         });
-        await session.query(`INSERT INTO monitor_history(asset_id,timestamp,oi_usd,market_cap_usd,fdv_usd,oi_to_fdv,oi_to_market_cap,complete)
+        await session.query(`INSERT INTO monitor_history(asset_id,timestamp,oi_usd,market_cap_usd,fdv_usd,oi_to_fdv,oi_to_market_cap,complete,validated)
           VALUES ${rows.join(',')} ON CONFLICT(asset_id,timestamp) DO UPDATE SET
           oi_usd=excluded.oi_usd,market_cap_usd=excluded.market_cap_usd,fdv_usd=excluded.fdv_usd,
-          oi_to_fdv=excluded.oi_to_fdv,oi_to_market_cap=excluded.oi_to_market_cap,complete=excluded.complete`, values);
+          oi_to_fdv=excluded.oi_to_fdv,oi_to_market_cap=excluded.oi_to_market_cap,complete=excluded.complete,validated=excluded.validated`, values);
       }
       await this.saveStates(session, 'global', states);
       for (const event of events) await session.query(`INSERT INTO monitor_alerts(id,asset_id,timestamp,payload)
@@ -92,11 +101,14 @@ export class MonitorStore {
   }
   async history(assetId: string, hours: number, now = Date.now()): Promise<HistoryPoint[]> {
     const result = await this.db.query(`SELECT * FROM monitor_history WHERE asset_id=$1 AND timestamp>=$2 AND timestamp<=$3
-      ORDER BY timestamp ASC LIMIT 43201`, [assetId, now - hours * 3_600_000, now]);
+      ORDER BY timestamp ASC LIMIT 43201`, [assetId, Math.floor(now / 60_000) * 60_000 - hours * 3_600_000, now]);
     const numberOrNull = (value: unknown) => value === null ? null : Number(value);
     return result.rows.map(row => ({ assetId: String(row.asset_id), timestamp: Number(row.timestamp),
-      oiUsd: numberOrNull(row.oi_usd), marketCapUsd: numberOrNull(row.market_cap_usd), fdvUsd: numberOrNull(row.fdv_usd),
-      oiToFdv: numberOrNull(row.oi_to_fdv), oiToMarketCap: numberOrNull(row.oi_to_market_cap), complete: Number(row.complete) === 1 }));
+      oiUsd: Number(row.complete) === 1 ? numberOrNull(row.oi_usd) : null,
+      marketCapUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.market_cap_usd) : null,
+      fdvUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.fdv_usd) : null,
+      oiToFdv: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_fdv) : null,
+      oiToMarketCap: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_market_cap) : null, complete: Number(row.complete) === 1 }));
   }
   async alerts(limit = 100): Promise<AlertEvent[]> {
     const result = await this.db.query('SELECT payload FROM monitor_alerts ORDER BY timestamp DESC,id ASC LIMIT $1', [limit]);

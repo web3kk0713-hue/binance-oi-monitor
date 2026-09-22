@@ -18,7 +18,7 @@ function sample(now: number, ratio = 95): Snapshot {
       marketCapUsd: 80, fdvUsd: 100, oiToFdv: ratio, oiToMarketCap: ratio / 80 * 100,
       circulatingSupply: 80, maxSupply: 100, updatedAt: now, oiUpdatedAt: now, priceUpdatedAt: now, supplyUpdatedAt: now,
       complete: true, alertEligible: true, issues: [], supplySource: 'test', mappingStatus: 'verified',
-      evidence: { contracts: [], supply: null, mapping: 'Synthetic test mapping' } }] };
+      evidence: { contracts: [], supply: { provider: 'CoinGecko', id: 'synthetic-fixture', circulating: 80, total: 100, max: 100, updatedAt: now, fetchedAt: now, url: 'https://example.invalid/synthetic' }, mapping: 'Synthetic test mapping' } }] };
 }
 function event(now: number): AlertEvent { return { id: `test:${now}`, assetId: 'test:1', symbol: 'TEST', level: 'danger', ratio: 95, oiUsd: 95, fdvUsd: 100, timestamp: now }; }
 const disabledPush: PushSender = { enabled: false, publicKey: null, send: async () => {} };
@@ -38,6 +38,44 @@ afterEach(async () => {
 });
 
 describe('real SQLite persistence and scheduling', () => {
+  it('retains three/seven-day values across restart without recalculating old FDV', async () => {
+    const path = temporaryPath();
+    const clock = Math.floor(Date.now() / 60_000) * 60_000 + 1_000;
+    const first = await open(path);
+    for (const offset of [168, 72, 0]) {
+      const snapshot = sample(clock - offset * 3_600_000);
+      snapshot.assets[0].fdvUsd = 100 + offset;
+      await first.commitCollection(snapshot, {}, []);
+    }
+    await close(first);
+    const second = await open(path);
+    expect((await second.history('test:1', 72, clock)).map(point => point.fdvUsd)).toEqual([172, 100]);
+    expect((await second.history('test:1', 168, clock)).map(point => point.fdvUsd)).toEqual([268, 172, 100]);
+  });
+
+  it('preserves consecutive start-minute slots across collection-duration jitter', async () => {
+    const store = await open(temporaryPath());
+    const minute = Math.floor(Date.now() / 60_000) * 60_000;
+    const first = sample(minute + 70_000); first.startedAt = minute + 50_000;
+    const second = sample(minute + 115_000); second.startedAt = minute + 110_000;
+    await store.commitCollection(first, {}, []);
+    await store.commitCollection(second, {}, []);
+    expect((await store.history('test:1', 1, minute + 120_000)).map(point => point.timestamp)).toEqual([minute, minute + 60_000]);
+  });
+
+  it('migrates legacy rows without destroying raw data or certifying unverified valuations', async () => {
+    const database = new SqliteDatabase(temporaryPath());
+    await database.query(`CREATE TABLE monitor_history (asset_id TEXT NOT NULL, timestamp BIGINT NOT NULL, oi_usd DOUBLE PRECISION,
+      market_cap_usd DOUBLE PRECISION, fdv_usd DOUBLE PRECISION, oi_to_fdv DOUBLE PRECISION, oi_to_market_cap DOUBLE PRECISION, complete INTEGER NOT NULL,
+      PRIMARY KEY(asset_id,timestamp))`);
+    const clock = Date.now();
+    await database.query('INSERT INTO monitor_history VALUES($1,$2,50,80,100,50,62.5,1)', ['test:1', clock]);
+    const store = new MonitorStore(database); stores.add(store);
+    await store.initialize(); await store.initialize();
+    expect(await store.history('test:1', 1, clock)).toMatchObject([{ oiUsd: 50, fdvUsd: null, marketCapUsd: null }]);
+    expect((await database.query('SELECT fdv_usd FROM monitor_history')).rows[0].fdv_usd).toBe(100);
+  });
+
   it('restores the snapshot, minute history, and alert cooldown after closing and reopening the database', async () => {
     const path = temporaryPath();
     let clock = Date.now();

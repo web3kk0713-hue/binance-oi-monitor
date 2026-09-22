@@ -1,4 +1,5 @@
 import { openDB, type DBSchema } from 'idb';
+import { toHistoryPoint } from '../shared/history';
 import { validThresholds } from '../shared/alerts';
 import { DEFAULT_THRESHOLDS, type AlertEvent, type AlertState, type HistoryPoint, type Snapshot, type Thresholds } from '../shared/types';
 
@@ -36,6 +37,8 @@ interface HourRecord {
   assetId: string; hour: number;
   /** Three USD amounts for each minute. NaN is an absent value, never zero. */
   values: Float64Array; present: Uint8Array; complete: Uint8Array;
+  /** Missing in older records, whose supply freshness cannot be reconstructed. */
+  validated?: Uint8Array;
 }
 export interface PushRegistration { id: string; deleteToken: string; backendUrl: string; }
 interface MonitorDB extends DBSchema {
@@ -53,17 +56,20 @@ let lastPrunedHour = 0;
 /** Bounded hourly binary blocks keep 30-day history much smaller than per-point objects. */
 export async function saveSnapshot(snapshot: Snapshot): Promise<void> {
   const db = await getDB();
-  const minuteAt = Math.floor(snapshot.asOf / 60_000) * 60_000;
+  const minuteAt = Math.floor(snapshot.startedAt / 60_000) * 60_000;
   const hour = Math.floor(minuteAt / HOUR) * HOUR;
   const minute = (minuteAt - hour) / 60_000;
   const tx = db.transaction(['hours', 'state'], 'readwrite');
   const records = tx.objectStore('hours');
   await Promise.all(snapshot.assets.map(async (asset) => {
     const record = await records.get([asset.id, hour]) ?? { assetId: asset.id, hour, values: new Float64Array(180).fill(NaN), present: new Uint8Array(60), complete: new Uint8Array(60) };
-    record.values[minute * 3] = asset.oiUsd ?? NaN;
-    record.values[minute * 3 + 1] = asset.marketCapUsd ?? NaN;
-    record.values[minute * 3 + 2] = asset.fdvUsd ?? NaN;
-    record.present[minute] = 1; record.complete[minute] = Number(asset.complete);
+    const point = toHistoryPoint(asset, snapshot);
+    record.validated ??= new Uint8Array(60);
+    record.values[minute * 3] = point.oiUsd ?? NaN;
+    record.values[minute * 3 + 1] = point.marketCapUsd ?? NaN;
+    record.values[minute * 3 + 2] = point.fdvUsd ?? NaN;
+    record.present[minute] = 1; record.complete[minute] = Number(point.complete);
+    record.validated[minute] = 1;
     await records.put(record);
   }));
   await tx.objectStore('state').put(snapshot, 'latest');
@@ -81,7 +87,7 @@ export async function loadLatest(): Promise<Snapshot | undefined> {
 }
 
 export async function readHistory(assetId: string, hours: number, now = Date.now()): Promise<HistoryPoint[]> {
-  const start = now - hours * HOUR;
+  const start = Math.floor(now / 60_000) * 60_000 - hours * HOUR;
   const records = await (await getDB()).getAll('hours', IDBKeyRange.bound([assetId, Math.floor(start / HOUR) * HOUR], [assetId, now]));
   const points: HistoryPoint[] = [];
   for (const record of records) {
@@ -89,9 +95,9 @@ export async function readHistory(assetId: string, hours: number, now = Date.now
       const timestamp = record.hour + minute * 60_000;
       if (!record.present[minute] || timestamp < start || timestamp > now) continue;
       const finite = (n: number) => Number.isFinite(n) ? n : null;
-      const oiUsd = finite(record.values[minute * 3]);
-      const marketCapUsd = finite(record.values[minute * 3 + 1]);
-      const fdvUsd = finite(record.values[minute * 3 + 2]);
+      const oiUsd = record.complete[minute] ? finite(record.values[minute * 3]) : null;
+      const marketCapUsd = record.validated?.[minute] && record.complete[minute] ? finite(record.values[minute * 3 + 1]) : null;
+      const fdvUsd = record.validated?.[minute] && record.complete[minute] ? finite(record.values[minute * 3 + 2]) : null;
       points.push({ assetId, timestamp, oiUsd, marketCapUsd, fdvUsd,
         oiToFdv: oiUsd !== null && fdvUsd !== null && fdvUsd > 0 ? oiUsd / fdvUsd * 100 : null,
         oiToMarketCap: oiUsd !== null && marketCapUsd !== null && marketCapUsd > 0 ? oiUsd / marketCapUsd * 100 : null,

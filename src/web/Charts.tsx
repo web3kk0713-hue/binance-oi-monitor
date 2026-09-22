@@ -5,12 +5,14 @@ import { AriaComponent, GridComponent, LegendComponent, MarkLineComponent, Toolt
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
 import type { AssetRow, HistoryPoint, Thresholds } from '../shared/types';
+import { historySeries, type HistoryView } from '../shared/history';
 import { escapeHtml, money, percent } from './format';
 
 echarts.use([LineChart, EScatterChart, AriaComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, CanvasRenderer]);
 const COLORS = { oi: '#356ee6', cap: '#099a95', fdv: '#9161cb', warning: '#c69015', danger: '#e05a42', critical: '#c92f43' };
 const TEXT = '#738295';
 const GRID = '#edf1f5';
+const chartPercent = (value: number | null) => value === null || !Number.isFinite(value) ? '—' : `${value.toLocaleString('en-US', { maximumSignificantDigits: 4 })}%`;
 
 function Chart({ option, label, onSelect, className = '' }: { option: EChartsOption; label: string; onSelect?: (id: string) => void; className?: string }) {
   const element = useRef<HTMLDivElement>(null);
@@ -69,17 +71,8 @@ export const ScatterChart = memo(function ScatterChart({ assets, thresholds, sel
   return <Chart option={option} label={`全市场 OI 与 FDV 散点图，${points.length} 个币种，点击可选中币种`} onSelect={onSelect} className="scatter-canvas" />;
 });
 
-function withGaps(points: HistoryPoint[]): HistoryPoint[] {
-  const result: HistoryPoint[] = [];
-  for (const point of points) {
-    const previous = result.at(-1);
-    if (previous && point.timestamp - previous.timestamp > 90_000) result.push({ ...previous, timestamp: previous.timestamp + 60_000, oiUsd: null, marketCapUsd: null, fdvUsd: null, oiToFdv: null, oiToMarketCap: null, complete: false });
-    result.push(point);
-  }
-  return result;
-}
-export const HistoryCharts = memo(function HistoryCharts({ points, thresholds, hours, symbol, now }: { points: HistoryPoint[]; thresholds: Thresholds; hours: number; symbol: string; now: number }) {
-  const prepared = useMemo(() => withGaps(points), [points]);
+export const HistoryCharts = memo(function HistoryCharts({ points, baseline, view, thresholds, hours, symbol, now }: { points: HistoryPoint[]; baseline: HistoryPoint | null; view: HistoryView; thresholds: Thresholds; hours: number; symbol: string; now: number }) {
+  const prepared = useMemo(() => historySeries(points, baseline, view), [points, baseline, view]);
   const option = useMemo<EChartsOption>(() => {
     const series = [
       { name: '合约 OI', key: 'oiUsd' as const, color: COLORS.oi },
@@ -88,20 +81,21 @@ export const HistoryCharts = memo(function HistoryCharts({ points, thresholds, h
       { name: 'OI / FDV', key: 'oiToFdv' as const, color: COLORS.oi },
       { name: 'OI / 流通市值', key: 'oiToMarketCap' as const, color: COLORS.cap },
     ];
-    const timeAxis = { type: 'time' as const, min: now - hours * 3_600_000, max: now, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 10 }, splitLine: { show: false } };
+    const firstTimestamp = view === 'change' && baseline ? baseline.timestamp : points[0]?.timestamp ?? now;
+    const timeAxis = { type: 'time' as const, min: Math.max(now - hours * 3_600_000, Math.min(firstTimestamp, now - 60_000)), max: now, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 10 }, splitLine: { show: false } };
     return {
-      animation: false, textStyle: { fontFamily: 'inherit' }, aria: { enabled: true },
-      grid: [{ left: 65, right: 22, top: 16, height: '49%' }, { left: 65, right: 22, top: '68%', bottom: 30 }],
+      animation: false, textStyle: { fontFamily: 'inherit' }, aria: { enabled: true, label: { description: `${symbol} 的 OI、流通市值和 FDV ${view === 'change' ? '相对共同起点涨跌幅' : '美元金额'}；下图为 OI 占比。缺失分钟保留空缺，具体变化见上方数值。` } },
+      grid: [{ left: 65, right: 22, top: 25, height: '46%' }, { left: 65, right: 22, top: '70%', bottom: 30 }],
       xAxis: [{ ...timeAxis, gridIndex: 0 }, { ...timeAxis, gridIndex: 1 }],
       yAxis: [
-        { type: 'value', gridIndex: 0, scale: true, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 10, formatter: (value: number) => money(value).replace('$', '') }, splitNumber: 3, splitLine: { lineStyle: { color: GRID } } },
-        { type: 'value', gridIndex: 1, min: 0, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 10, formatter: '{value}%' }, splitNumber: 2, splitLine: { lineStyle: { color: GRID } } },
+        { type: 'value', name: view === 'change' ? '相对起点变化 · %' : '金额 · USD', nameTextStyle: { color: TEXT, align: 'left', fontSize: 10 }, gridIndex: 0, scale: true, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 10, formatter: (value: number) => view === 'change' ? chartPercent(value) : money(value).replace('$', '') }, splitNumber: 3, splitLine: { lineStyle: { color: GRID } } },
+        { type: 'value', name: 'OI / 估值 · %', nameTextStyle: { color: TEXT, align: 'left', fontSize: 10 }, gridIndex: 1, min: 0, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 10, formatter: '{value}%' }, splitNumber: 2, splitLine: { lineStyle: { color: GRID } } },
       ],
       tooltip: { trigger: 'axis', confine: true, backgroundColor: '#142c44', borderWidth: 0, textStyle: { color: '#fff', fontSize: 12 }, axisPointer: { type: 'line', lineStyle: { color: '#8398b1', type: 'dashed' } },
         formatter: (parameters: unknown) => {
           const items = parameters as { seriesName: string; value: [number, number | null]; color: string }[];
           if (!items.length) return '';
-          return `${escapeHtml(new Date(items[0].value[0]).toLocaleString('zh-CN', { hour12: false }))}<br/>` + items.map((item) => `<span style="color:${escapeHtml(item.color)}">●</span> ${escapeHtml(item.seriesName)}　${item.seriesName.includes('/') ? percent(item.value[1]) : money(item.value[1])}`).join('<br/>');
+          return `${escapeHtml(new Date(items[0].value[0]).toLocaleString('zh-CN', { hour12: false }))}<br/>` + items.map((item) => `<span style="color:${escapeHtml(item.color)}">●</span> ${escapeHtml(item.seriesName)}　${item.seriesName.includes('/') || view === 'change' ? chartPercent(item.value[1]) : money(item.value[1])}`).join('<br/>');
         },
       },
       series: series.map((s, index) => ({ name: s.name, type: 'line', xAxisIndex: index < 3 ? 0 : 1, yAxisIndex: index < 3 ? 0 : 1,
@@ -113,7 +107,7 @@ export const HistoryCharts = memo(function HistoryCharts({ points, thresholds, h
         ] } } : {}),
       })),
     };
-  }, [prepared, points.length, hours, now, thresholds.warning, thresholds.critical]);
+  }, [prepared, points, baseline, view, symbol, hours, now, thresholds.warning, thresholds.critical]);
   if (points.length === 0) return <div className="chart-empty history-empty"><strong>这个时间区间还没有历史</strong><p>真实分钟数据会随着采集积累。<br/>页面关闭或采集失败的时间段保留为空缺。</p></div>;
-  return <Chart option={option} label={`${symbol} 合约 OI、流通市值、FDV 美元曲线和独立百分比曲线`} className="history-canvas" />;
+  return <Chart option={option} label={`${symbol} 合约 OI、流通市值、FDV ${view === 'change' ? '相对共同起点的涨跌幅' : '美元金额'}曲线和独立 OI 占比曲线；缺失数据不连线`} className="history-canvas" />;
 });

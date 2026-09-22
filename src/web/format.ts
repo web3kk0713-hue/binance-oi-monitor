@@ -9,6 +9,13 @@ export function money(value: number | null | undefined, compact = true): string 
   return '$' + value.toLocaleString('en-US', { maximumFractionDigits: abs < 1 ? 6 : 2 });
 }
 export function percent(value: number | null | undefined): string { return value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%'; }
+export function signed(value: number | null, suffix = '%', digits = 2): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  const unit = 10 ** -digits;
+  if (value !== 0 && Math.abs(value) < unit) return `${value > 0 ? '+' : '−'}<${unit}${suffix}`;
+  return `${value > 0 ? '+' : ''}${value.toLocaleString('en-US', { maximumFractionDigits: digits })}${suffix}`;
+}
+export function signedMoney(value: number | null): string { return value === null ? '—' : `${value > 0 ? '+' : value < 0 ? '−' : ''}${money(Math.abs(value))}`; }
 export function tokenPrice(value: number | null | undefined): string { return value == null || !Number.isFinite(value) ? '—' : '$' + value.toLocaleString('en-US', { maximumSignificantDigits: 7 }); }
 export function dateTime(timestamp: number | null | undefined): string { return timestamp ? new Date(timestamp).toLocaleString('zh-CN', { hour12: false }) : '—'; }
 export function clockTime(timestamp: number | null | undefined): string { return timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '—'; }
