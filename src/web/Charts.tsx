@@ -115,5 +115,5 @@ export const HistoryCharts = memo(function HistoryCharts({ points, thresholds, h
     };
   }, [prepared, points.length, hours, now, thresholds.warning, thresholds.critical]);
   if (points.length === 0) return <div className="chart-empty history-empty"><strong>这个时间区间还没有历史</strong><p>真实分钟数据会随着采集积累。<br/>页面关闭或采集失败的时间段保留为空缺。</p></div>;
-  return <><Chart option={option} label={`${symbol} 合约 OI、流通市值、FDV 美元曲线和独立百分比曲线`} className="history-canvas" /><div className="ratio-axis-label">比例</div></>;
+  return <Chart option={option} label={`${symbol} 合约 OI、流通市值、FDV 美元曲线和独立百分比曲线`} className="history-canvas" />;
 });
