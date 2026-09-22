@@ -1,0 +1,40 @@
+{
+  "name": "binance-oi-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "server": "node --env-file-if-exists=.env --import tsx server/index.ts",
+    "probe": "tsx scripts/probe.ts",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.3.0",
+    "@fastify/rate-limit": "11.2.0",
+    "decimal.js": "10.6.0",
+    "echarts": "6.1.0",
+    "fastify": "5.12.5",
+    "idb": "8.0.3",
+    "pg": "8.23.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tsx": "4.23.15",
+    "web-push": "3.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/web-push": "^3.6.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "~5.9.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.1"
+  }
+}
