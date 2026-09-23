@@ -23,7 +23,12 @@ self.addEventListener('notificationclick', (event) => {
   if (target.origin !== self.location.origin || !target.pathname.startsWith(new URL(self.registration.scope).pathname)) return;
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
     const client = clients.find((item) => item.url.startsWith(self.registration.scope));
-    if (client) { await client.focus(); client.postMessage({ type: 'select-asset', assetId: event.notification.data?.assetId }); return; }
+    if (client) {
+      await client.focus();
+      const data = event.notification.data;
+      client.postMessage(data?.marketKey ? { type: 'select-flow-event', marketKey: data.marketKey, eventId: data.eventId } : { type: 'select-asset', assetId: data?.assetId });
+      return;
+    }
     return self.clients.openWindow(target.href);
   }));
 });

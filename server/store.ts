@@ -1,6 +1,7 @@
 import { COLLECTION_INTERVAL_MS, type AlertEvent, type AlertState, type HistoryPoint, type RawContractPoint, type Snapshot, type Thresholds } from '../src/shared/types';
 import { toHistoryPoint } from '../src/shared/history';
 import type { Database, SqlSession, SqlValue } from './database';
+import { FlowStore } from './flow-store';
 
 export interface StoredSubscription {
   id: string; endpointHash: string; tokenHash: string; subscription: PushSubscriptionJSON;
@@ -16,6 +17,7 @@ function encodeThresholds(t: Thresholds) {
 export class MonitorStore {
   constructor(private db: Database) {}
   get kind() { return this.db.kind; }
+  createFlowStore() { return new FlowStore(this.db); }
   async ping() { await this.db.query('SELECT 1 AS ready'); }
   async initialize() {
     const statements = [

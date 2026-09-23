@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { evaluateAlerts } from '../src/shared/alerts';
-import { COLLECTION_INTERVAL_MS, DEFAULT_THRESHOLDS, type BackendStatus, type Collector } from '../src/shared/types';
+import { COLLECTION_INTERVAL_MS, DEFAULT_THRESHOLDS, type BackendStatus, type Collector, type Snapshot } from '../src/shared/types';
 import type { ServerConfig } from './config';
 import type { PushSender } from './push';
 import { MonitorStore, type SubscriptionEvaluation } from './store';
@@ -18,7 +18,7 @@ export class MonitorScheduler {
   private lastError: string | null = null;
   private lastDurationMs: number | null = null;
   constructor(private store: MonitorStore, private collector: Collector, private push: PushSender,
-    private config: ServerConfig, private now: () => number = Date.now) {}
+    private config: ServerConfig, private now: () => number = Date.now, private onSnapshot?: (snapshot: Snapshot) => void) {}
 
   async initialize() {
     const latest = await this.store.latest();
@@ -80,6 +80,7 @@ export class MonitorScheduler {
       this.lastSuccess = snapshot.asOf;
       this.lastError = snapshot.errors.length ? '部分源数据缺失，详见快照覆盖率' : null;
       completedAt = Math.floor(start / COLLECTION_INTERVAL_MS) * COLLECTION_INTERVAL_MS;
+      try { this.onSnapshot?.(snapshot); } catch { /* The independent flow feed retries from the persisted OI snapshot. */ }
       void this.flushPush();
       return true;
     } catch {

@@ -13,6 +13,7 @@ import { useLiveMarket } from './useLiveMarket';
 
 const ScatterChart = lazy(() => import('./Charts').then((m) => ({ default: m.ScatterChart })));
 const HistoryCharts = lazy(() => import('./Charts').then((m) => ({ default: m.HistoryCharts })));
+const FlowDashboard = lazy(() => import('./FlowDashboard'));
 const EMPTY_ASSETS: AssetRow[] = [];
 const PAGE_SIZE = 25;
 const RANGES = [{ label: '5 分钟', hours: 5 / 60 }, { label: '1 小时', hours: 1 }, { label: '24 小时', hours: 24 }, { label: '3 天', hours: 72 }, { label: '7 天', hours: 168 }, { label: '30 天', hours: 720 }];
@@ -115,6 +116,10 @@ function MarketFlowRow({ label, market, now }: { label: string; market: MarketOb
 
 export default function App() {
   const [settings, setSettings] = useState(readSettings);
+  const [view, setView] = useState<'flow' | 'valuation'>(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('view') === 'valuation' || (params.has('asset') && params.get('view') !== 'flow') ? 'valuation' : 'flow';
+  });
   const [now, setNow] = useState(Date.now());
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get('asset'));
   const [query, setQuery] = useState(''); const deferredQuery = useDeferredValue(query);
@@ -135,13 +140,16 @@ export default function App() {
   const settingsRef = useRef(settings); settingsRef.current = settings;
 
   useEffect(() => { const interval = setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(interval); }, []);
-  useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key === '/' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !dialog) { event.preventDefault(); document.querySelector<HTMLInputElement>('.search-field input')?.focus(); } }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [dialog]);
+  useEffect(() => { const onKey = (event: KeyboardEvent) => { if (view === 'valuation' && event.key === '/' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !dialog) { event.preventDefault(); document.querySelector<HTMLInputElement>('.search-field input')?.focus(); } }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [dialog, view]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), 7_000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => { if (!toastAlert) return; const timer = setTimeout(() => setToastAlert(null), 15_000); return () => clearTimeout(timer); }, [toastAlert]);
   useEffect(() => { void loadPushRegistration().then((value) => setPushConnected(Boolean(value))).catch(() => undefined);
     if ('serviceWorker' in navigator) {
       void registerNotifications().catch(() => undefined);
-      const onMessage = (event: MessageEvent) => { if (event.data?.type === 'select-asset' && typeof event.data.assetId === 'string') setSelectedId(event.data.assetId); };
+      const onMessage = (event: MessageEvent) => {
+        if (event.data?.type === 'select-flow-event') setView('flow');
+        if (event.data?.type === 'select-asset' && typeof event.data.assetId === 'string') { setSelectedId(event.data.assetId); setView('valuation'); setMobileView('detail'); }
+      };
       navigator.serviceWorker.addEventListener('message', onMessage); return () => navigator.serviceWorker.removeEventListener('message', onMessage);
     }
   }, []);
@@ -177,8 +185,8 @@ export default function App() {
   const monitor = useMonitor(settings, onSnapshot);
   const assets = monitor.snapshot?.assets ?? EMPTY_ASSETS;
   const selected = assets.find((row) => row.id === selectedId) ?? assets.find((row) => row.symbol === 'BTC') ?? assets[0];
-  const liveMarket = useLiveMarket(selected);
-  const history = useHistory(selected?.id, hours, settings, monitor.historyVersion);
+  const liveMarket = useLiveMarket(view === 'valuation' ? selected : undefined);
+  const history = useHistory(view === 'valuation' ? selected?.id : undefined, hours, settings, monitor.historyVersion);
   // Keep the actual newest sample; advance the view clock without rebuilding long histories every second.
   const historyNow = Math.max(monitor.snapshot?.asOf ?? 0, Math.floor(now / 30_000) * 30_000);
   const trend = useMemo(() => analyzeHistory(history.points, selected?.id, hours, historyNow), [history.points, selected?.id, hours, historyNow]);
@@ -210,7 +218,7 @@ export default function App() {
   const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const changeSort = (key: SortKey) => setSort((previous) => ({ key, direction: previous.key === key && previous.direction === 'desc' ? 'asc' : 'desc' }));
   const toggleFavorite = (id: string) => setSettings((previous) => { const next = { ...previous, favorites: previous.favorites.includes(id) ? previous.favorites.filter((value) => value !== id) : [...previous.favorites, id] }; writeLocal('settings', next); return next; });
-  const select = useCallback((id: string) => { setSelectedId(id); setMobileView('detail'); }, []);
+  const select = useCallback((id: string) => { setView('valuation'); setSelectedId(id); setMobileView('detail'); }, []);
   const saveSettings = async (next: Settings) => {
     if (pushConnected && (next.mode !== 'server' || next.backendUrl !== settings.backendUrl)) { await disconnectPush(); setPushConnected(false); }
     else if (pushConnected && next.mode === 'server') await connectPush(next.backendUrl, next.thresholds);
@@ -236,8 +244,9 @@ export default function App() {
   const rangeLabel = RANGES.find((range) => range.hours === hours)?.label ?? '';
 
   return <>
-    <header className="topbar"><a className="brand" href="./" aria-label="OI 监测首页"><span className="brand-mark"><Icon name="chart" size={21}/></span><span>持仓监测</span><span className="brand-tag">Binance</span></a><nav aria-label="主导航"><button className="nav-item active" onClick={() => { setMobileView('market'); document.getElementById('market')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }}>行情</button><button className="nav-item" onClick={() => setDialog('distribution')}>市场分布</button><button className="nav-item" onClick={() => setDialog('alerts')}>提醒{alerts.length ? <span>{alerts.length}</span> : null}</button></nav><div className="header-actions"><button className="header-icon" onClick={() => setDialog('source')} title="查看数据来源" aria-label="查看数据来源"><Icon name="source" /></button><button className="header-settings" aria-label="监测设置" onClick={() => setDialog('settings')}><Icon name="settings" size={18} /><span>设置</span></button></div></header>
-    <main className="workspace" id="market">
+    <header className="topbar"><a className="brand" href="./" aria-label="市场监测首页"><span className="brand-mark"><Icon name="chart" size={21}/></span><span>市场监测</span><span className="brand-tag">Binance</span></a><nav aria-label="主导航"><button className={`nav-item ${view === 'flow' ? 'active' : ''}`} aria-current={view === 'flow' ? 'page' : undefined} onClick={() => setView('flow')}>异常监控</button><button className={`nav-item ${view === 'valuation' ? 'active' : ''}`} aria-current={view === 'valuation' ? 'page' : undefined} onClick={() => setView('valuation')}>持仓估值</button><button className="nav-item secondary-nav" onClick={() => setDialog('distribution')}>市场分布</button><button className="nav-item secondary-nav" onClick={() => setDialog('alerts')}>估值提醒{alerts.length ? <span>{alerts.length}</span> : null}</button></nav><div className="header-actions"><button className="header-icon" onClick={() => setDialog('source')} title="持仓估值数据来源" aria-label="持仓估值数据来源"><Icon name="source" /></button><button className="header-settings" aria-label="监测设置" onClick={() => setDialog('settings')}><Icon name="settings" size={18} /><span>设置</span></button></div></header>
+    <div className="view-panel" hidden={view !== 'flow'}><Suspense fallback={<main className="workspace"><div className="chart-loading">正在连接异常监控…</div></main>}><FlowDashboard settings={settings} snapshot={monitor.snapshot} onOpenSettings={() => setDialog('settings')}/></Suspense></div>
+    {view === 'valuation' ? <main className="workspace" id="market">
       <div className={`connection-bar ${settings.mode === 'server' ? 'server-mode' : ''}`}><span className="connection-badge"><span className={`status-dot ${monitor.error || snapshotStale || !monitor.snapshot ? 'warning-dot' : monitor.collecting ? 'loading-dot' : ''}`} />{settings.mode === 'direct' ? '浏览器采集 · 未连接后台' : monitor.backend && !monitor.error ? '已连接后台' : '后台连接待确认'}</span><span className="connection-description">{settings.mode === 'direct' ? '关页或休眠会中断采集，历史仅在本机' : monitor.backend ? `后台独立采集 · ${monitor.backend.retentionDays} 天历史${pushConnected ? ' · 推送已开启' : ''}` : '正在检查后台运行状态'}</span><button onClick={() => setDialog('settings')}>{settings.mode === 'direct' ? '连接后台' : '管理连接'}<Icon name="chevron" size={13} /></button></div>
       <div className="page-heading"><div><h1>合约市场<span>USDⓈ-M 永续</span></h1><p>源头持仓数据，滚动 5 分钟观察</p></div><div className="refresh-controls"><div className="refresh-meta"><strong>{monitor.collecting ? settings.mode === 'direct' ? '正在采集' : '检查后台快照' : monitor.error ? '等待重试' : `${countdown} 秒后刷新`}</strong><span>{monitor.snapshot ? `更新于 ${clockTime(monitor.snapshot.asOf)}` : `目标每 ${intervalSeconds} 秒采集`}</span></div><button className="button secondary refresh-button" onClick={monitor.refresh} disabled={monitor.collecting} aria-label="立即刷新行情"><Icon name="refresh" className={monitor.collecting ? 'spinning' : ''} size={17}/><span>刷新</span></button></div></div>
       {monitor.collecting && settings.mode === 'direct' ? <div className="collection-progress" role="status"><div className="progress-track"><div style={{ width: `${Math.max(3, progressPercent)}%` }} /></div><span>{monitor.progress?.total ? `${monitor.progress.done} / ${monitor.progress.total}` : '连接官方接口…'}{monitor.progress?.failed ? ` · ${monitor.progress.failed} 项暂未取得` : ''}</span></div> : null}
@@ -271,8 +280,8 @@ export default function App() {
         </tbody></table></div><div className="pagination"><span>{filtered.length ? `${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, filtered.length)} / ${filtered.length} 个币种` : '0 个币种'}</span><div><button className="pagination-arrow" disabled={currentPage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} aria-label="上一页"><Icon name="chevron" size={15}/></button><span>{currentPage} <em>/ {pages}</em></span><button className="pagination-arrow" disabled={currentPage >= pages} onClick={() => setPage((p) => p + 1)} aria-label="下一页"><Icon name="chevron" size={15}/></button></div><span>每页 {PAGE_SIZE} 项</span></div>
       </section>
       </div>
-      <footer className="page-footer"><span>OI / 价格来自 Binance；供应量来自 {settings.mode === 'direct' ? 'CoinGecko' : 'CoinMarketCap / CoinGecko'}。<button onClick={() => setDialog('source')}>查看口径<Icon name="external" size={12}/></button></span><span>目标 {intervalSeconds} 秒采集 · 供应量每小时刷新 · 观察指标尚无收益验证，不构成买卖信号</span></footer>
-    </main>
+      <footer className="page-footer"><span>OI / 价格来自 Binance；供应量来自 {settings.mode === 'direct' ? 'CoinGecko' : 'CoinMarketCap / CoinGecko'}。<button onClick={() => setDialog('source')}>查看口径<Icon name="external" size={12}/></button><button onClick={() => setDialog('distribution')}>市场分布</button><button onClick={() => setDialog('alerts')}>提醒记录</button></span><span>目标 {intervalSeconds} 秒采集 · 供应量每小时刷新 · 观察指标尚无收益验证，不构成买卖信号</span></footer>
+    </main> : null}
     {dialog === 'settings' ? <SettingsDialog settings={settings} onSave={saveSettings} onClose={() => setDialog(null)} pushConnected={pushConnected} onConnectPush={connectBackendPush} onDisconnectPush={disconnectBackendPush} onEnableNotifications={enableNotifications} onDisableNotifications={disableNotifications} onTest={testAlert}/> : null}
     {dialog === 'source' ? <SourceDialog row={selected} snapshot={monitor.snapshot} onClose={() => setDialog(null)}/> : null}
     {dialog === 'alerts' ? <AlertList alerts={alerts} onSelect={select} onClose={() => setDialog(null)}/> : null}

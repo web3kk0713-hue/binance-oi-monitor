@@ -32,7 +32,7 @@ export interface MarketBook {
   id: number; sourceTime: number | null; receivedAt: number; bid: number; ask: number; spreadBps: number;
 }
 
-const safeSymbol = (symbol: string) => /^[A-Z0-9_]{2,40}$/.test(symbol);
+const safeSymbol = (symbol: string) => /^[\p{L}\p{N}_]{1,40}$/u.test(symbol);
 const stableQuotes = new Set(['USDT', 'USDC', 'USD1', 'U']);
 const object = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;

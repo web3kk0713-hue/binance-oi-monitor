@@ -8,24 +8,32 @@ import type { ServerConfig } from './config';
 import { BrowserPushSender, hashSecret, newDeleteToken, tokenMatches, validPushSubscription, type PushSender } from './push';
 import { MonitorScheduler } from './scheduler';
 import { MonitorStore } from './store';
+import { FlowRuntime, type FlowFeedFactory } from './flow-runtime';
+import { FLOW_RETENTION_MS, type FlowStore } from './flow-store';
 
 const thresholdsSchema = { type: 'object', additionalProperties: false, required: ['warning', 'danger', 'critical', 'cooldownMinutes'],
   properties: { warning: { type: 'number', exclusiveMinimum: 0, maximum: 10000 }, danger: { type: 'number', exclusiveMinimum: 0, maximum: 10000 },
     critical: { type: 'number', exclusiveMinimum: 0, maximum: 10000 }, cooldownMinutes: { type: 'number', minimum: 1, maximum: 1440 } } };
 function bearer(authorization: string | undefined) { return authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined; }
 
-export interface AppOptions { store: MonitorStore; collector: Collector; config: ServerConfig; pushSender?: PushSender; startJobs?: boolean; logger?: boolean; now?: () => number; }
+export interface AppOptions { store: MonitorStore; collector: Collector; config: ServerConfig; pushSender?: PushSender; startJobs?: boolean; logger?: boolean; now?: () => number;
+  flowStore?: FlowStore; flowFeedFactory?: FlowFeedFactory; flowEnabled?: boolean; }
 export async function buildApp(options: AppOptions) {
   const { store, collector, config } = options;
   const now = options.now ?? Date.now;
+  const flowStore = options.flowStore ?? store.createFlowStore();
+  await flowStore.initialize();
+  const flow = new FlowRuntime(flowStore, store, options.flowFeedFactory ?? (async settings => {
+    const module = await import('../src/data/flowFeed'); return module.createFlowFeed(settings);
+  }), now);
   const push = options.pushSender ?? new BrowserPushSender(config);
-  const scheduler = new MonitorScheduler(store, collector, push, config, now);
+  const scheduler = new MonitorScheduler(store, collector, push, config, now, snapshot => flow.updateSnapshot(snapshot));
   await scheduler.initialize();
   const app = Fastify({ logger: options.logger ? { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'body.subscription', 'body.deleteToken'] } : false,
     logController: new LogController({ disableRequestLogging: true }), bodyLimit: 8192, requestTimeout: 15_000, connectionTimeout: 15_000, trustProxy: false,
     ajv: { customOptions: { removeAdditional: false } } });
   await app.register(cors, { origin: config.allowedOrigins, methods: ['GET', 'POST', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'], maxAge: 600 });
-  await app.register(rateLimit, { max: 120, timeWindow: '1 minute', errorResponseBuilder: () => ({ error: 'rate_limited', message: '请求过于频繁，请稍后重试' }) });
+  await app.register(rateLimit, { max: 120, timeWindow: '1 minute', errorResponseBuilder: (_request, context) => ({ statusCode: context.statusCode, error: 'rate_limited', message: '请求过于频繁，请稍后重试' }) });
   app.addHook('onRequest', async (_request, reply) => { reply.header('X-Content-Type-Options', 'nosniff'); reply.header('Cache-Control', 'no-store'); });
   app.setErrorHandler((error, _request, reply) => {
     const details = error as { validation?: unknown; statusCode?: number };
@@ -59,6 +67,27 @@ export async function buildApp(options: AppOptions) {
       } },
     }, config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async request => store.contractHistory(request.params.symbol, request.query.hours ?? 24, now()));
+  const marketKeySchema = { type: 'string', minLength: 6, maxLength: 120, pattern: '^(futures|spot):[\\p{L}\\p{N}_]+$' };
+  const timeSchema = { type: 'integer', minimum: 1, maximum: 8_640_000_000_000_000 };
+  app.get('/api/v1/flow/snapshot', async () => flow.snapshot());
+  app.get<{ Querystring: { marketKey?: string; limit?: number; before?: number } }>('/api/v1/flow/events', {
+    schema: { querystring: { type: 'object', additionalProperties: false, properties: {
+      marketKey: marketKeySchema, limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 }, before: timeSchema,
+    } } }, config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const clock = now(), before = request.query.before ?? clock + 1;
+    if (before > clock + 1) return reply.status(400).send({ error: 'invalid_request', message: '事件游标不能在未来' });
+    return flowStore.events(request.query.marketKey, request.query.limit ?? 100, before, Math.max(0, clock - FLOW_RETENTION_MS), clock);
+  });
+  app.get<{ Querystring: { marketKey: string; hours?: number; to?: number } }>('/api/v1/flow/history', {
+    schema: { querystring: { type: 'object', additionalProperties: false, required: ['marketKey'], properties: {
+      marketKey: marketKeySchema, hours: { type: 'number', minimum: 1 / 60, maximum: 168, default: 24 }, to: timeSchema,
+    } } }, config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const to = request.query.to ?? now();
+    if (to > now()) return reply.status(400).send({ error: 'invalid_request', message: '历史查询时间不能在未来' });
+    return flowStore.history(request.query.marketKey, request.query.hours ?? 24, to);
+  });
   app.get<{ Querystring: { limit?: number } }>('/api/v1/alerts', { schema: { querystring: { type: 'object', additionalProperties: false,
     properties: { limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 } } } } }, async request => store.alerts(request.query.limit));
   app.get('/api/v1/push/key', async () => ({ publicKey: push.publicKey }));
@@ -97,7 +126,7 @@ export async function buildApp(options: AppOptions) {
     await store.deleteSubscription(existing.id);
     return reply.status(204).send();
   });
-  app.addHook('onReady', async () => { if (options.startJobs !== false) scheduler.start(); });
-  app.addHook('onClose', async () => { await scheduler.stop(); await store.close(); });
-  return { app, scheduler };
+  app.addHook('onReady', async () => { if (options.startJobs !== false) { scheduler.start(); if (options.flowEnabled !== false) flow.start(); } });
+  app.addHook('onClose', async () => { await scheduler.stop(); await flow.stop(); await store.close(); });
+  return { app, scheduler, flow, flowStore };
 }

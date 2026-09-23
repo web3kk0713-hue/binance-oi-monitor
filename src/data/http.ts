@@ -5,27 +5,34 @@ export class SourceError extends Error {
   }
 }
 
-/** A shared semaphore also bounds metadata requests, not only OI workers. */
+const governors = new WeakMap<typeof fetch, { cooldowns: Map<string, number>; limit: number; minute: number; used: number }>();
+export function binanceRequestWeight(url: URL): number {
+  const limit = Number(url.searchParams.get('limit') ?? 500);
+  if (url.pathname === '/fapi/v1/klines') return limit < 100 ? 1 : limit < 500 ? 2 : limit <= 1000 ? 5 : 10;
+  if (url.pathname === '/fapi/v1/depth') return limit <= 50 ? 2 : limit <= 100 ? 5 : limit <= 500 ? 10 : 20;
+  return !url.searchParams.has('symbol') && ['/fapi/v1/premiumIndex', '/fapi/v1/assetIndex'].includes(url.pathname) ? 10 : 1;
+}
+/** Per-client semaphore, shared transport/IP budget. Injected test transports stay isolated. */
 export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
   let active = 0;
   const waiters: Array<() => void> = [];
-  const cooldowns = new Map<string, number>();
+  let governor = governors.get(fetcher);
+  if (!governor) { governor = { cooldowns: new Map(), limit: 1200, minute: -1, used: 0 }; governors.set(fetcher, governor); }
+  const budgetState = governor;
+  const cooldowns = budgetState.cooldowns;
   // A conservative bootstrap budget is replaced by exchangeInfo's current limit.
   // Keep 20% free for metadata, other clients on the same IP, and in-flight requests.
-  let binanceLimit = 1200;
-  let weightMinute = -1;
-  let usedWeight = 0;
   function refreshWeightWindow() {
     const minute = Math.floor(Date.now() / 60_000);
-    if (minute !== weightMinute) { weightMinute = minute; usedWeight = 0; }
+    if (minute !== budgetState.minute) { budgetState.minute = minute; budgetState.used = 0; }
   }
   function reserveWeight(url: URL) {
     if (url.hostname !== 'fapi.binance.com') return;
     refreshWeightWindow();
-    const weight = !url.searchParams.has('symbol') && ['/fapi/v1/premiumIndex', '/fapi/v1/assetIndex'].includes(url.pathname) ? 10 : 1;
-    const budget = Math.floor(binanceLimit * 0.8);
-    if (usedWeight + weight > budget) throw new SourceError('RATE_LIMIT_BUDGET', url.href, `主动配额保护 ${usedWeight}/${budget}，本轮跳过，等待下一配额窗口`);
-    usedWeight += weight;
+    const weight = binanceRequestWeight(url);
+    const budget = Math.floor(budgetState.limit * 0.8);
+    if (budgetState.used + weight > budget) throw new SourceError('RATE_LIMIT_BUDGET', url.href, `主动配额保护 ${budgetState.used}/${budget}，本轮跳过，等待下一配额窗口`);
+    budgetState.used += weight;
   }
 
   async function acquire(signal: AbortSignal) {
@@ -74,7 +81,7 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
         refreshWeightWindow();
         const header = response.headers.get('x-mbx-used-weight-1m');
         const upstreamWeight = header === null ? NaN : Number(header);
-        if (Number.isFinite(upstreamWeight) && upstreamWeight >= 0) usedWeight = Math.max(usedWeight, upstreamWeight);
+        if (Number.isFinite(upstreamWeight) && upstreamWeight >= 0) budgetState.used = Math.max(budgetState.used, upstreamWeight);
       }
       if (!response.ok) {
         if (response.status === 429 || response.status === 418) {
@@ -99,7 +106,7 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
   }
   return Object.assign(request, {
     setBinanceWeightLimit(limit: number) {
-      if (Number.isInteger(limit) && limit > 0 && limit <= 10_000_000) binanceLimit = limit;
+      if (Number.isInteger(limit) && limit > 0 && limit <= 10_000_000) budgetState.limit = limit;
     },
   });
 }

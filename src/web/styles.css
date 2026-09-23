@@ -47,6 +47,7 @@ input { min-width: 0; }
 .header-settings { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-radius: 7px; min-height: 36px; font-size: 13px; }
 .header-icon:hover, .header-settings:hover { background: #f3f3f5; }
 .workspace { max-width: 1680px; margin: auto; padding: 0 24px 26px; }
+.view-panel[hidden] { display: none; }
 .connection-bar { display: flex; align-items: center; gap: 16px; min-height: 41px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
 .connection-badge { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--teal); }
@@ -382,7 +383,7 @@ tr.critical-row.selected-row { background: #fff2f4; }
   .brand-mark { width: 24px; }
   .brand-tag, .header-icon { display: none; }
   .topbar nav { gap: 16px; }
-  .topbar nav .nav-item:first-child { display: none; }
+  .topbar nav .secondary-nav { display: none; }
   .nav-item { font-size: 12px; }
   .nav-item > span { display: none; }
   .header-actions { gap: 0; }

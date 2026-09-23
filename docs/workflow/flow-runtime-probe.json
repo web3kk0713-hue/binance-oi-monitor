@@ -1,0 +1,1895 @@
+{
+  "startedAt": 1790157321658,
+  "completedAt": 1790157683033,
+  "samples": [
+    {
+      "elapsedSeconds": 30,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157351913,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 57,
+        "warmingMarkets": 492,
+        "staleMarkets": 0,
+        "backfilledMarkets": 59,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157351913,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85813.9,
+        "priceChange5m": -0.04230300840815993,
+        "volume5m": 36012393.5873,
+        "buyShare5m": 36.68916754830627,
+        "delta5m": -9587098.7445,
+        "volumeMultiple": 1.1097304944441317,
+        "vwap5m": 85752.98207498422,
+        "range5mPct": 0.1624528752643938,
+        "atr14": 34.65714285714265,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85810,
+          "indexPrice": 85835.06434783,
+          "fundingRate": 0.00004294,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157350000,
+          "receivedAt": 1790157351314
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157349846,
+          "receivedAt": 1790157351079,
+          "bid": 85813.9,
+          "ask": 85814,
+          "bandBps": 10,
+          "spreadBps": 0.011653117005547555,
+          "bidDepthQuote": 17315516.053099997,
+          "askDepthQuote": 19070072.9827,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 349,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157350473,
+        "lastCandleAt": 1790157350473
+      },
+      "events": [],
+      "closedCandles": 17596,
+      "eventUpdates": 0,
+      "depthPoints": 24,
+      "memoryMiB": 165
+    },
+    {
+      "elapsedSeconds": 60,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157381913,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 119,
+        "warmingMarkets": 430,
+        "staleMarkets": 0,
+        "backfilledMarkets": 119,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157381913,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85864.8,
+        "priceChange5m": 0.06657556734975609,
+        "volume5m": 34010472.2211,
+        "buyShare5m": 42.040772393714064,
+        "delta5m": -5413941.7881,
+        "volumeMultiple": 1.0480408102478873,
+        "vwap5m": 85747.53166286384,
+        "range5mPct": 0.15448796276432017,
+        "atr14": 36.41428571428488,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85864.7,
+          "indexPrice": 85876.96521739,
+          "fundingRate": 0.00004384,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157380000,
+          "receivedAt": 1790157381303
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157380445,
+          "receivedAt": 1790157381677,
+          "bid": 85864.7,
+          "ask": 85864.8,
+          "bandBps": 10,
+          "spreadBps": 0.011646222693925127,
+          "bidDepthQuote": 22564584.72280002,
+          "askDepthQuote": 19713217.078500003,
+          "buySlippageBps": null,
+          "sellSlippageBps": null,
+          "orderSizeQuote": 10000,
+          "complete": false,
+          "reason": "可验证盘口未完整覆盖价格±10bp或数据过期；不判断流动性异常"
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 938,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157380489,
+        "lastCandleAt": 1790157380489
+      },
+      "events": [],
+      "closedCandles": 39662,
+      "eventUpdates": 0,
+      "depthPoints": 54,
+      "memoryMiB": 244
+    },
+    {
+      "elapsedSeconds": 90,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157411914,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 179,
+        "warmingMarkets": 370,
+        "staleMarkets": 0,
+        "backfilledMarkets": 179,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157411914,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85866.8,
+        "priceChange5m": 0.06657556734975609,
+        "volume5m": 34010472.2211,
+        "buyShare5m": 42.040772393714064,
+        "delta5m": -5413941.7881,
+        "volumeMultiple": 1.0480408102478873,
+        "vwap5m": 85747.53166286384,
+        "range5mPct": 0.15448796276432017,
+        "atr14": 36.41428571428488,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85873.85936282,
+          "indexPrice": 85886.02695652,
+          "fundingRate": 0.00004384,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157410002,
+          "receivedAt": 1790157411315
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157410026,
+          "receivedAt": 1790157411257,
+          "bid": 85866.7,
+          "ask": 85866.8,
+          "bandBps": 10,
+          "spreadBps": 0.011645951431237441,
+          "bidDepthQuote": 19336900.763,
+          "askDepthQuote": 19963970.0975,
+          "buySlippageBps": null,
+          "sellSlippageBps": null,
+          "orderSizeQuote": 10000,
+          "complete": false,
+          "reason": "可验证盘口未完整覆盖价格±10bp或数据过期；不判断流动性异常"
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 1401,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157410353,
+        "lastCandleAt": 1790157410120
+      },
+      "events": [],
+      "closedCandles": 61143,
+      "eventUpdates": 0,
+      "depthPoints": 83,
+      "memoryMiB": 275
+    },
+    {
+      "elapsedSeconds": 120,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157441915,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 239,
+        "warmingMarkets": 310,
+        "staleMarkets": 0,
+        "backfilledMarkets": 239,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157441915,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85887.9,
+        "priceChange5m": 0.10983398977214694,
+        "volume5m": 46700028.0278,
+        "buyShare5m": 48.876865258650874,
+        "delta5m": -1049008.478,
+        "volumeMultiple": 1.439072497866999,
+        "vwap5m": 85785.8734958549,
+        "range5mPct": 0.22864591713713392,
+        "atr14": 39.51428571428446,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85887.9,
+          "indexPrice": 85899.6976087,
+          "fundingRate": 0.00004384,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157440005,
+          "receivedAt": 1790157441319
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157439705,
+          "receivedAt": 1790157440939,
+          "bid": 85887.9,
+          "ask": 85888,
+          "bandBps": 10,
+          "spreadBps": 0.011643076823445054,
+          "bidDepthQuote": 16041763.520699998,
+          "askDepthQuote": 24524248.46360001,
+          "buySlippageBps": null,
+          "sellSlippageBps": null,
+          "orderSizeQuote": 10000,
+          "complete": false,
+          "reason": "可验证盘口未完整覆盖价格±10bp或数据过期；不判断流动性异常"
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 1914,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157440399,
+        "lastCandleAt": 1790157440582
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:BARDUSDT:sell_pressure:1790157419999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:BARDUSDT",
+          "symbol": "BARDUSDT",
+          "assetId": "binance:BARD",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157419999,
+          "detectedAt": 1790157424290,
+          "referencePrice": 0.147,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 29478.0396,
+              "unit": "USDT",
+              "baseline": 9011.8252
+            },
+            {
+              "label": "成交额倍数",
+              "value": 3.271039877693145,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -15248.8982,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:EPICUSDT:sell_pressure:1790157419999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:EPICUSDT",
+          "symbol": "EPICUSDT",
+          "assetId": "binance:EPIC",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157419999,
+          "detectedAt": 1790157421680,
+          "referencePrice": 0.5816,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 137145.91806,
+              "unit": "USDT",
+              "baseline": 35975.44661
+            },
+            {
+              "label": "成交额倍数",
+              "value": 3.812208908669334,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -67451.31846,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 5,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 83145,
+      "eventUpdates": 2,
+      "depthPoints": 113,
+      "memoryMiB": 291
+    },
+    {
+      "elapsedSeconds": 150,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157471920,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 299,
+        "warmingMarkets": 250,
+        "staleMarkets": 0,
+        "backfilledMarkets": 299,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157471920,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85810,
+        "priceChange5m": 0.10983398977214694,
+        "volume5m": 46700028.0278,
+        "buyShare5m": 48.876865258650874,
+        "delta5m": -1049008.478,
+        "volumeMultiple": 1.439072497866999,
+        "vwap5m": 85785.8734958549,
+        "range5mPct": 0.22864591713713392,
+        "atr14": 39.51428571428446,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85838.50526812,
+          "indexPrice": 85858.01717391,
+          "fundingRate": 0.00004384,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157470000,
+          "receivedAt": 1790157471326
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157470510,
+          "receivedAt": 1790157471743,
+          "bid": 85810,
+          "ask": 85810.1,
+          "bandBps": 10,
+          "spreadBps": 0.011653646630647664,
+          "bidDepthQuote": 16295250.175599985,
+          "askDepthQuote": 16213493.287899995,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 2753,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157470245,
+        "lastCandleAt": 1790157470120
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:BARDUSDT:sell_pressure:1790157419999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:BARDUSDT",
+          "symbol": "BARDUSDT",
+          "assetId": "binance:BARD",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157419999,
+          "detectedAt": 1790157424290,
+          "referencePrice": 0.147,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 29478.0396,
+              "unit": "USDT",
+              "baseline": 9011.8252
+            },
+            {
+              "label": "成交额倍数",
+              "value": 3.271039877693145,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -15248.8982,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:EPICUSDT:sell_pressure:1790157419999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:EPICUSDT",
+          "symbol": "EPICUSDT",
+          "assetId": "binance:EPIC",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157419999,
+          "detectedAt": 1790157421680,
+          "referencePrice": 0.5816,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 137145.91806,
+              "unit": "USDT",
+              "baseline": 35975.44661
+            },
+            {
+              "label": "成交额倍数",
+              "value": 3.812208908669334,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -67451.31846,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 5,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 104567,
+      "eventUpdates": 2,
+      "depthPoints": 142,
+      "memoryMiB": 323
+    },
+    {
+      "elapsedSeconds": 180,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157501923,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 359,
+        "warmingMarkets": 190,
+        "staleMarkets": 0,
+        "backfilledMarkets": 359,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157501923,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85812.6,
+        "priceChange5m": 0.04092187303260226,
+        "volume5m": 52195678.5946,
+        "buyShare5m": 49.63154994632085,
+        "delta5m": -384630.0116,
+        "volumeMultiple": 1.6084222803523787,
+        "vwap5m": 85806.94566852761,
+        "range5mPct": 0.2415672960784954,
+        "atr14": 44.71428571428467,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85816.5,
+          "indexPrice": 85854.97956522,
+          "fundingRate": 0.00004549,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157500000,
+          "receivedAt": 1790157501304
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157500090,
+          "receivedAt": 1790157501324,
+          "bid": 85812.5,
+          "ask": 85812.6,
+          "bandBps": 10,
+          "spreadBps": 0.011653307121839495,
+          "bidDepthQuote": 17480059.84519998,
+          "askDepthQuote": 18353305.6053,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 3068,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157500027,
+        "lastCandleAt": 1790157500549
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:LINEAUSDT:buy_pressure:1790157479999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:LINEAUSDT",
+          "symbol": "LINEAUSDT",
+          "assetId": "binance:LINEA",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "buy_pressure",
+          "severity": "warning",
+          "title": "持续主动买压",
+          "timestamp": 1790157479999,
+          "detectedAt": 1790157482116,
+          "referencePrice": 0.002942,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 36055.098749,
+              "unit": "USDT",
+              "baseline": 16769.1481955
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.150085283322583,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": 28473.055629,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 5,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:JCTUSDT:sell_pressure:1790157479999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:JCTUSDT",
+          "symbol": "JCTUSDT",
+          "assetId": "binance:JCT",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157479999,
+          "detectedAt": 1790157481728,
+          "referencePrice": 0.001864,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 24885.365011,
+              "unit": "USDT",
+              "baseline": 7069.5123815
+            },
+            {
+              "label": "成交额倍数",
+              "value": 3.5200963896918527,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -19654.289751,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:ACHUSDT:sell_pressure:1790157479999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:ACHUSDT",
+          "symbol": "ACHUSDT",
+          "assetId": "binance:ACH",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157479999,
+          "detectedAt": 1790157481493,
+          "referencePrice": 0.006079,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 20737.173636,
+              "unit": "USDT",
+              "baseline": 7267.64403
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.8533557161577163,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -12339.682894,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 126512,
+      "eventUpdates": 6,
+      "depthPoints": 171,
+      "memoryMiB": 349
+    },
+    {
+      "elapsedSeconds": 211,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157531926,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 418,
+        "warmingMarkets": 131,
+        "staleMarkets": 0,
+        "backfilledMarkets": 418,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157531926,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85812.6,
+        "priceChange5m": 0.04092187303260226,
+        "volume5m": 52195678.5946,
+        "buyShare5m": 49.63154994632085,
+        "delta5m": -384630.0116,
+        "volumeMultiple": 1.6084222803523787,
+        "vwap5m": 85806.94566852761,
+        "range5mPct": 0.2415672960784954,
+        "atr14": 44.71428571428467,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85817.31739855,
+          "indexPrice": 85849.98630435,
+          "fundingRate": 0.00004549,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157530001,
+          "receivedAt": 1790157531306
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157530691,
+          "receivedAt": 1790157531922,
+          "bid": 85812.5,
+          "ask": 85812.6,
+          "bandBps": 10,
+          "spreadBps": 0.011653307121839495,
+          "bidDepthQuote": 18102424.62259999,
+          "askDepthQuote": 17541950.373100005,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 3547,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157530250,
+        "lastCandleAt": 1790157530251
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:LINEAUSDT:buy_pressure:1790157479999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:LINEAUSDT",
+          "symbol": "LINEAUSDT",
+          "assetId": "binance:LINEA",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "buy_pressure",
+          "severity": "warning",
+          "title": "持续主动买压",
+          "timestamp": 1790157479999,
+          "detectedAt": 1790157482116,
+          "referencePrice": 0.002942,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 36055.098749,
+              "unit": "USDT",
+              "baseline": 16769.1481955
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.150085283322583,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": 28473.055629,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 5,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:JCTUSDT:sell_pressure:1790157479999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:JCTUSDT",
+          "symbol": "JCTUSDT",
+          "assetId": "binance:JCT",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157479999,
+          "detectedAt": 1790157481728,
+          "referencePrice": 0.001864,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 24885.365011,
+              "unit": "USDT",
+              "baseline": 7069.5123815
+            },
+            {
+              "label": "成交额倍数",
+              "value": 3.5200963896918527,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -19654.289751,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:ACHUSDT:sell_pressure:1790157479999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:ACHUSDT",
+          "symbol": "ACHUSDT",
+          "assetId": "binance:ACH",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157479999,
+          "detectedAt": 1790157481493,
+          "referencePrice": 0.006079,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 20737.173636,
+              "unit": "USDT",
+              "baseline": 7267.64403
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.8533557161577163,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -12339.682894,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 147872,
+      "eventUpdates": 6,
+      "depthPoints": 201,
+      "memoryMiB": 365
+    },
+    {
+      "elapsedSeconds": 241,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157561927,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 478,
+        "warmingMarkets": 71,
+        "staleMarkets": 0,
+        "backfilledMarkets": 478,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157561927,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85806.8,
+        "priceChange5m": 0.08808362694542315,
+        "volume5m": 60136257.6959,
+        "buyShare5m": 53.867733561193276,
+        "delta5m": 4651820.4427,
+        "volumeMultiple": 1.8531131185466487,
+        "vwap5m": 85817.23771726784,
+        "range5mPct": 0.24173413911379704,
+        "atr14": 47.364285714285096,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85806.8,
+          "indexPrice": 85840.02,
+          "fundingRate": 0.00004631,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157560004,
+          "receivedAt": 1790157561326
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157560170,
+          "receivedAt": 1790157561400,
+          "bid": 85806.8,
+          "ask": 85806.9,
+          "bandBps": 10,
+          "spreadBps": 0.011654081229094046,
+          "bidDepthQuote": 15012555.311699992,
+          "askDepthQuote": 43030440.28619998,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 4163,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157560397,
+        "lastCandleAt": 1790157560227
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:FRAXUSDT:sell_pressure:1790157539999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:FRAXUSDT",
+          "symbol": "FRAXUSDT",
+          "assetId": "binance:FRAX",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157539999,
+          "detectedAt": 1790157544245,
+          "referencePrice": 0.3001,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 6249.592,
+              "unit": "USDT",
+              "baseline": 2318.67895
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.695324421692792,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -4921.3264,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:COWUSDT:buy_pressure:1790157539999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:COWUSDT",
+          "symbol": "COWUSDT",
+          "assetId": "binance:COW",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "buy_pressure",
+          "severity": "warning",
+          "title": "持续主动买压",
+          "timestamp": 1790157539999,
+          "detectedAt": 1790157542334,
+          "referencePrice": 0.1513,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 13597.2956,
+              "unit": "USDT",
+              "baseline": 6497.5957
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.0926656917111663,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": 5760.516,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:PNUTUSDC:buy_pressure:1790157539999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:PNUTUSDC",
+          "symbol": "PNUTUSDC",
+          "assetId": "binance:PNUT",
+          "venue": "futures",
+          "quoteAsset": "USDC",
+          "kind": "buy_pressure",
+          "severity": "warning",
+          "title": "持续主动买压",
+          "timestamp": 1790157539999,
+          "detectedAt": 1790157541664,
+          "referencePrice": 0.05784,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 20207.81815,
+              "unit": "USDC",
+              "baseline": 3591.285825
+            },
+            {
+              "label": "成交额倍数",
+              "value": 5.62690332507856,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": 11077.76105,
+              "unit": "USDC"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 169754,
+      "eventUpdates": 13,
+      "depthPoints": 228,
+      "memoryMiB": 409
+    },
+    {
+      "elapsedSeconds": 271,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157591927,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 538,
+        "warmingMarkets": 11,
+        "staleMarkets": 0,
+        "backfilledMarkets": 538,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157591927,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85819.3,
+        "priceChange5m": 0.08808362694542315,
+        "volume5m": 60136257.6959,
+        "buyShare5m": 53.867733561193276,
+        "delta5m": 4651820.4427,
+        "volumeMultiple": 1.8531131185466487,
+        "vwap5m": 85817.23771726784,
+        "range5mPct": 0.24173413911379704,
+        "atr14": 47.364285714285096,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85828.869,
+          "indexPrice": 85859.04434783,
+          "fundingRate": 0.00004631,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157590002,
+          "receivedAt": 1790157591331
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157589953,
+          "receivedAt": 1790157591184,
+          "bid": 85825.4,
+          "ask": 85825.5,
+          "bandBps": 10,
+          "spreadBps": 0.011651555570733479,
+          "bidDepthQuote": 17526243.91070002,
+          "askDepthQuote": 23320276.883999985,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 4648,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157590117,
+        "lastCandleAt": 1790157590026
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:FRAXUSDT:sell_pressure:1790157539999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:FRAXUSDT",
+          "symbol": "FRAXUSDT",
+          "assetId": "binance:FRAX",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157539999,
+          "detectedAt": 1790157544245,
+          "referencePrice": 0.3001,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 6249.592,
+              "unit": "USDT",
+              "baseline": 2318.67895
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.695324421692792,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -4921.3264,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:COWUSDT:buy_pressure:1790157539999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:COWUSDT",
+          "symbol": "COWUSDT",
+          "assetId": "binance:COW",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "buy_pressure",
+          "severity": "warning",
+          "title": "持续主动买压",
+          "timestamp": 1790157539999,
+          "detectedAt": 1790157542334,
+          "referencePrice": 0.1513,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 13597.2956,
+              "unit": "USDT",
+              "baseline": 6497.5957
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.0926656917111663,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": 5760.516,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:PNUTUSDC:buy_pressure:1790157539999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:PNUTUSDC",
+          "symbol": "PNUTUSDC",
+          "assetId": "binance:PNUT",
+          "venue": "futures",
+          "quoteAsset": "USDC",
+          "kind": "buy_pressure",
+          "severity": "warning",
+          "title": "持续主动买压",
+          "timestamp": 1790157539999,
+          "detectedAt": 1790157541664,
+          "referencePrice": 0.05784,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 20207.81815,
+              "unit": "USDC",
+              "baseline": 3591.285825
+            },
+            {
+              "label": "成交额倍数",
+              "value": 5.62690332507856,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": 11077.76105,
+              "unit": "USDC"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 190699,
+      "eventUpdates": 13,
+      "depthPoints": 258,
+      "memoryMiB": 414
+    },
+    {
+      "elapsedSeconds": 301,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157621927,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 549,
+        "warmingMarkets": 0,
+        "staleMarkets": 0,
+        "backfilledMarkets": 549,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157621927,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益；大额样本不足1000条或5分钟覆盖",
+        "price": 85800.3,
+        "priceChange5m": 0.05362974258889421,
+        "volume5m": 81114614.9038,
+        "buyShare5m": 69.01059476703205,
+        "delta5m": 30840741.4724,
+        "volumeMultiple": 2.4257923340271472,
+        "vwap5m": 85829.75851773002,
+        "range5mPct": 0.14713203292866195,
+        "atr14": 47.59285714285632,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85803.32194928,
+          "indexPrice": 85838.04521739,
+          "fundingRate": 0.00004631,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157620000,
+          "receivedAt": 1790157621310
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157619838,
+          "receivedAt": 1790157621071,
+          "bid": 85800.3,
+          "ask": 85800.4,
+          "bandBps": 10,
+          "spreadBps": 0.011654964110434146,
+          "bidDepthQuote": 18592863.83339998,
+          "askDepthQuote": 15311051.540300008,
+          "buySlippageBps": 0,
+          "sellSlippageBps": 0,
+          "orderSizeQuote": 10000,
+          "complete": true,
+          "reason": null
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 5073,
+        "largeTradeThreshold": null,
+        "lastTradeAt": 1790157620291,
+        "lastCandleAt": 1790157620291
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:SIGNUSDT:breakout_down:1790157599999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:SIGNUSDT",
+          "symbol": "SIGNUSDT",
+          "assetId": "binance:SIGN",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "breakout_down",
+          "severity": "warning",
+          "title": "放量跌破区间",
+          "timestamp": 1790157599999,
+          "detectedAt": 1790157604337,
+          "referencePrice": 0.012579,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 22835.383988,
+              "unit": "USDT",
+              "baseline": 3784.7189175
+            },
+            {
+              "label": "成交额倍数",
+              "value": 6.033574615650437,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -13108.859582,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "此前12窗边界",
+              "value": 0.012638,
+              "unit": "USDT"
+            }
+          ],
+          "reason": "实验性规则；完整5m收盘越过此前12个完整非重叠5m区间，成交额至少为基准2倍。",
+          "invalidation": "假突破、新闻冲击及流动性变化均可能出现；不预测后续延续。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:SIGNUSDT:sell_pressure:1790157599999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:SIGNUSDT",
+          "symbol": "SIGNUSDT",
+          "assetId": "binance:SIGN",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157599999,
+          "detectedAt": 1790157604337,
+          "referencePrice": 0.012579,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 22835.383988,
+              "unit": "USDT",
+              "baseline": 3784.7189175
+            },
+            {
+              "label": "成交额倍数",
+              "value": 6.033574615650437,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -13108.859582,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        },
+        {
+          "id": "flow-v1:futures:DOSUSDT:sell_pressure:1790157599999",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:DOSUSDT",
+          "symbol": "DOSUSDT",
+          "assetId": "binance:DOS",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "sell_pressure",
+          "severity": "warning",
+          "title": "持续主动卖压",
+          "timestamp": 1790157599999,
+          "detectedAt": 1790157604289,
+          "referencePrice": 0.2252,
+          "evidence": [
+            {
+              "label": "5m成交额",
+              "value": 30477.1427,
+              "unit": "USDT",
+              "baseline": 13720.46405
+            },
+            {
+              "label": "成交额倍数",
+              "value": 2.2212909555344087,
+              "unit": "倍"
+            },
+            {
+              "label": "5m主动成交差",
+              "value": -11695.0649,
+              "unit": "USDT"
+            },
+            {
+              "label": "完整5m基准窗口",
+              "value": 60,
+              "unit": "个"
+            },
+            {
+              "label": "同向分钟",
+              "value": 4,
+              "unit": "/5"
+            }
+          ],
+          "reason": "实验性规则；5根完整1m中至少4根同向主动成交占比达到65%，成交额至少为此前基准的2倍。",
+          "invalidation": "主动方向不代表开平仓或净资金流；对冲、平仓及被动吸收均可能产生该现象。",
+          "dataStatus": "complete",
+          "outcomes": []
+        }
+      ],
+      "closedCandles": 198703,
+      "eventUpdates": 37,
+      "depthPoints": 287,
+      "memoryMiB": 435
+    },
+    {
+      "elapsedSeconds": 331,
+      "status": {
+        "mode": "server",
+        "startedAt": 1790157321659,
+        "asOf": 1790157651927,
+        "connectedStreams": 13,
+        "totalStreams": 13,
+        "markets": 549,
+        "readyMarkets": 549,
+        "warmingMarkets": 0,
+        "staleMarkets": 0,
+        "backfilledMarkets": 549,
+        "errors": [],
+        "retentionDays": 7,
+        "scope": "USDⓈ-M 加密永续成交/K线；默认 BTCUSDT现货与标准深度（不含RPI）；OI目标30秒；历史从实际采集开始"
+      },
+      "btc": {
+        "market": {
+          "key": "futures:BTCUSDT",
+          "venue": "futures",
+          "symbol": "BTCUSDT",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "assetId": "binance:BTC"
+        },
+        "asOf": 1790157651927,
+        "status": "live",
+        "reason": "基于最近5根已闭合1m；规则尚未验证收益",
+        "price": 85888.8,
+        "priceChange5m": 0.05362974258889421,
+        "volume5m": 81114614.9038,
+        "buyShare5m": 69.01059476703205,
+        "delta5m": 30840741.4724,
+        "volumeMultiple": 2.4257923340271472,
+        "vwap5m": 85829.75851773002,
+        "range5mPct": 0.14713203292866195,
+        "atr14": 47.59285714285632,
+        "oiChange5m": null,
+        "funding": {
+          "marketKey": "futures:BTCUSDT",
+          "markPrice": 85891.26435507,
+          "indexPrice": 85917.88391304,
+          "fundingRate": 0.00004631,
+          "nextFundingTime": 1790179200000,
+          "fundingIntervalHours": 8,
+          "timestamp": 1790157650001,
+          "receivedAt": 1790157651310
+        },
+        "depth": {
+          "marketKey": "futures:BTCUSDT",
+          "timestamp": 1790157649725,
+          "receivedAt": 1790157650956,
+          "bid": 85886.8,
+          "ask": 85886.9,
+          "bandBps": 10,
+          "spreadBps": 0.011643225941022269,
+          "bidDepthQuote": 15000898.6274,
+          "askDepthQuote": 23309973.540500022,
+          "buySlippageBps": null,
+          "sellSlippageBps": null,
+          "orderSizeQuote": 10000,
+          "complete": false,
+          "reason": "可验证盘口未完整覆盖价格±10bp或数据过期；不判断流动性异常"
+        },
+        "baselineWindows": 60,
+        "tradeSamples": 5984,
+        "largeTradeThreshold": 429012.1804,
+        "lastTradeAt": 1790157650557,
+        "lastCandleAt": 1790157650613
+      },
+      "events": [
+        {
+          "id": "flow-v1:futures:BTCUSDT:large_sell:3462189368",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:BTCUSDT",
+          "symbol": "BTCUSDT",
+          "assetId": "binance:BTC",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "large_sell",
+          "severity": "warning",
+          "title": "大额主动卖出成交",
+          "timestamp": 1790157641534,
+          "detectedAt": 1790157642970,
+          "referencePrice": 85888.7,
+          "evidence": [
+            {
+              "label": "聚合成交额",
+              "value": 759685.5515,
+              "unit": "USDT",
+              "baseline": 429096.5
+            },
+            {
+              "label": "此前实际样本",
+              "value": 5366,
+              "unit": "条"
+            },
+            {
+              "label": "样本源时间覆盖",
+              "value": 319112,
+              "unit": "ms"
+            }
+          ],
+          "reason": "实验性规则；此前最多60分钟/10000条实际收到的聚合成交样本，至少1000条且覆盖5分钟；P99.5与100000报价币最低额取大值。",
+          "invalidation": "aggTrade不是单个完整订单，不识别账户、鲸鱼或开平仓；样本不代表7天完整交易。",
+          "dataStatus": "complete",
+          "outcomes": [],
+          "rawTrade": {
+            "marketKey": "futures:BTCUSDT",
+            "id": "3462189368",
+            "price": "85888.70",
+            "quantity": "8.845",
+            "quoteQuantity": "759685.5515",
+            "timestamp": 1790157641534,
+            "receivedAt": 1790157642970,
+            "side": "sell"
+          }
+        },
+        {
+          "id": "flow-v1:futures:ETHUSDT:large_sell:3097392850",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:ETHUSDT",
+          "symbol": "ETHUSDT",
+          "assetId": "binance:ETH",
+          "venue": "futures",
+          "quoteAsset": "USDT",
+          "kind": "large_sell",
+          "severity": "warning",
+          "title": "大额主动卖出成交",
+          "timestamp": 1790157641489,
+          "detectedAt": 1790157642944,
+          "referencePrice": 2735.5,
+          "evidence": [
+            {
+              "label": "聚合成交额",
+              "value": 312101.4015,
+              "unit": "USDT",
+              "baseline": 263648.49003
+            },
+            {
+              "label": "此前实际样本",
+              "value": 4077,
+              "unit": "条"
+            },
+            {
+              "label": "样本源时间覆盖",
+              "value": 318739,
+              "unit": "ms"
+            }
+          ],
+          "reason": "实验性规则；此前最多60分钟/10000条实际收到的聚合成交样本，至少1000条且覆盖5分钟；P99.5与100000报价币最低额取大值。",
+          "invalidation": "aggTrade不是单个完整订单，不识别账户、鲸鱼或开平仓；样本不代表7天完整交易。",
+          "dataStatus": "complete",
+          "outcomes": [],
+          "rawTrade": {
+            "marketKey": "futures:ETHUSDT",
+            "id": "3097392850",
+            "price": "2735.50",
+            "quantity": "114.093",
+            "quoteQuantity": "312101.4015",
+            "timestamp": 1790157641489,
+            "receivedAt": 1790157642944,
+            "side": "sell"
+          }
+        },
+        {
+          "id": "flow-v1:futures:BTCUSDC:large_buy:301799948",
+          "ruleVersion": "flow-v1",
+          "marketKey": "futures:BTCUSDC",
+          "symbol": "BTCUSDC",
+          "assetId": "binance:BTC",
+          "venue": "futures",
+          "quoteAsset": "USDC",
+          "kind": "large_buy",
+          "severity": "warning",
+          "title": "大额主动买入成交",
+          "timestamp": 1790157640971,
+          "detectedAt": 1790157642363,
+          "referencePrice": 85850,
+          "evidence": [
+            {
+              "label": "聚合成交额",
+              "value": 200288.05,
+              "unit": "USDC",
+              "baseline": 171458.228
+            },
+            {
+              "label": "此前实际样本",
+              "value": 1565,
+              "unit": "条"
+            },
+            {
+              "label": "样本源时间覆盖",
+              "value": 317285,
+              "unit": "ms"
+            }
+          ],
+          "reason": "实验性规则；此前最多60分钟/10000条实际收到的聚合成交样本，至少1000条且覆盖5分钟；P99.5与100000报价币最低额取大值。",
+          "invalidation": "aggTrade不是单个完整订单，不识别账户、鲸鱼或开平仓；样本不代表7天完整交易。",
+          "dataStatus": "complete",
+          "outcomes": [],
+          "rawTrade": {
+            "marketKey": "futures:BTCUSDC",
+            "id": "301799948",
+            "price": "85850.0",
+            "quantity": "2.333",
+            "quoteQuantity": "200288.05",
+            "timestamp": 1790157640971,
+            "receivedAt": 1790157642363,
+            "side": "buy"
+          }
+        }
+      ],
+      "closedCandles": 198703,
+      "eventUpdates": 44,
+      "depthPoints": 316,
+      "memoryMiB": 454
+    }
+  ]
+}
