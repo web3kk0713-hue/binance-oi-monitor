@@ -57,6 +57,17 @@ export async function buildApp(options: AppOptions) {
       assetId: { type: 'string', minLength: 1, maxLength: 120, pattern: '^[\\p{L}\\p{N}:_-]+$' }, hours: { type: 'integer', minimum: 1, maximum: 720, default: 24 },
     } } }, config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async request => store.history(request.query.assetId, request.query.hours ?? 24, now()));
+  app.get<{ Querystring: { at: number } }>('/api/v1/change-baselines', {
+    schema: { querystring: { type: 'object', additionalProperties: false, required: ['at'], properties: {
+      at: { type: 'integer', minimum: 1, maximum: 8_640_000_000_000_000 },
+    } } }, config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const clock = now(), at = request.query.at;
+    if (at > clock || at < clock - 7 * 86_400_000 - 120_000) {
+      return reply.status(400).send({ error: 'invalid_request', message: '变化基线时间须在最近七天内，且不能在未来' });
+    }
+    return store.changeBaselines(at);
+  });
   app.get<{ Params: { symbol: string }; Querystring: { hours?: number } }>('/api/v1/contracts/:symbol/history', {
     schema: {
       params: { type: 'object', additionalProperties: false, required: ['symbol'], properties: {

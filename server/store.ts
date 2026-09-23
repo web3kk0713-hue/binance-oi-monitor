@@ -1,5 +1,6 @@
 import { COLLECTION_INTERVAL_MS, type AlertEvent, type AlertState, type HistoryPoint, type RawContractPoint, type Snapshot, type Thresholds } from '../src/shared/types';
 import { toHistoryPoint } from '../src/shared/history';
+import { BASELINE_TOLERANCE_MS, selectChangeBaselines } from '../src/shared/changeMonitor';
 import type { Database, SqlSession, SqlValue } from './database';
 import { FlowStore } from './flow-store';
 
@@ -12,6 +13,22 @@ export interface SubscriptionEvaluation { id: string; thresholds: Thresholds; st
 const DAY = 86_400_000;
 function encodeThresholds(t: Thresholds) {
   return JSON.stringify({ warning: t.warning, danger: t.danger, critical: t.critical, cooldownMinutes: t.cooldownMinutes });
+}
+
+function historyPointFromRow(row: Record<string, unknown>): HistoryPoint {
+  const numberOrNull = (value: unknown) => value === null ? null : Number(value);
+  return { assetId: String(row.asset_id), timestamp: Number(row.timestamp),
+    oiUsd: Number(row.complete) === 1 ? numberOrNull(row.oi_usd) : null,
+    marketCapUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.market_cap_usd) : null,
+    fdvUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.fdv_usd) : null,
+    oiToFdv: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_fdv) : null,
+    oiToMarketCap: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_market_cap) : null, complete: Number(row.complete) === 1,
+    ...(row.available_at == null ? {} : { availableAt: Number(row.available_at),
+      oiQuantity: Number(row.complete) === 1 ? numberOrNull(row.oi_quantity) : null,
+      priceUsd: Number(row.complete) === 1 ? numberOrNull(row.price_usd) : null,
+      oiSourceTime: numberOrNull(row.oi_source_time), priceSourceTime: numberOrNull(row.price_source_time),
+      ...(row.sampling_interval_ms == null ? {} : { samplingIntervalMs: Number(row.sampling_interval_ms) }),
+      ...(row.contract_set_key == null ? {} : { contractSetKey: String(row.contract_set_key) }), sourceSkewMs: numberOrNull(row.source_skew_ms) }) };
 }
 
 export class MonitorStore {
@@ -139,19 +156,13 @@ export class MonitorStore {
   async history(assetId: string, hours: number, now = Date.now()): Promise<HistoryPoint[]> {
     const result = await this.db.query(`SELECT * FROM monitor_history WHERE asset_id=$1 AND timestamp>=$2 AND timestamp<=$3
       ORDER BY timestamp ASC LIMIT 86401`, [assetId, now - hours * 3_600_000, now]);
-    const numberOrNull = (value: unknown) => value === null ? null : Number(value);
-    return result.rows.map(row => ({ assetId: String(row.asset_id), timestamp: Number(row.timestamp),
-      oiUsd: Number(row.complete) === 1 ? numberOrNull(row.oi_usd) : null,
-      marketCapUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.market_cap_usd) : null,
-      fdvUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.fdv_usd) : null,
-      oiToFdv: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_fdv) : null,
-      oiToMarketCap: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_market_cap) : null, complete: Number(row.complete) === 1,
-      ...(row.available_at == null ? {} : { availableAt: Number(row.available_at),
-        oiQuantity: Number(row.complete) === 1 ? numberOrNull(row.oi_quantity) : null,
-        priceUsd: Number(row.complete) === 1 ? numberOrNull(row.price_usd) : null,
-        oiSourceTime: numberOrNull(row.oi_source_time), priceSourceTime: numberOrNull(row.price_source_time),
-        ...(row.sampling_interval_ms == null ? {} : { samplingIntervalMs: Number(row.sampling_interval_ms) }),
-        ...(row.contract_set_key == null ? {} : { contractSetKey: String(row.contract_set_key) }), sourceSkewMs: numberOrNull(row.source_skew_ms) }) }));
+    return result.rows.map(historyPointFromRow);
+  }
+  async changeBaselines(at: number): Promise<HistoryPoint[]> {
+    if (!Number.isSafeInteger(at) || at <= 0) return [];
+    const result = await this.db.query(`SELECT * FROM monitor_history WHERE timestamp>=$1 AND timestamp<=$2
+      ORDER BY timestamp DESC,asset_id ASC`, [at - BASELINE_TOLERANCE_MS, at]);
+    return selectChangeBaselines(result.rows.map(historyPointFromRow), at);
   }
   async contractHistory(symbol: string, hours: number, now = Date.now()): Promise<RawContractPoint[]> {
     const result = await this.db.query(`SELECT * FROM monitor_contract_history WHERE symbol=$1 AND available_at>=$2 AND available_at<=$3

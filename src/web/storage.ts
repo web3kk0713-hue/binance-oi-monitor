@@ -1,6 +1,7 @@
 import { openDB, type DBSchema } from 'idb';
 import { toHistoryPoint } from '../shared/history';
 import { validThresholds } from '../shared/alerts';
+import { BASELINE_TOLERANCE_MS, selectChangeBaselines } from '../shared/changeMonitor';
 import { DEFAULT_THRESHOLDS, type AlertEvent, type AlertState, type HistoryPoint, type Snapshot, type Thresholds } from '../shared/types';
 import { appendSample, compactSampleHour, unpackSamples, type SampleHour } from './historyCodec';
 
@@ -118,6 +119,15 @@ export async function readRecentSamples(now = Date.now()): Promise<HistoryPoint[
   const start = now - 10 * 60_000;
   const records = await (await getDB()).getAllFromIndex('samples', 'by-hour', IDBKeyRange.lowerBound(Math.floor(start / HOUR) * HOUR));
   return records.flatMap(unpackSamples).filter(point => point.timestamp >= start && point.timestamp <= now);
+}
+
+/** Read only the one or two raw-sample hours that can contain this comparison baseline. */
+export async function readChangeBaselines(at: number): Promise<HistoryPoint[]> {
+  if (!Number.isSafeInteger(at) || at <= 0) return [];
+  const firstHour = Math.floor((at - BASELINE_TOLERANCE_MS) / HOUR) * HOUR;
+  const lastHour = Math.floor(at / HOUR) * HOUR;
+  const records = await (await getDB()).getAllFromIndex('samples', 'by-hour', IDBKeyRange.bound(firstHour, lastHour));
+  return selectChangeBaselines(records.flatMap(unpackSamples), at);
 }
 
 export async function loadPushRegistration(): Promise<PushRegistration | undefined> {

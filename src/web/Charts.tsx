@@ -16,7 +16,7 @@ const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", 
 const TOOLTIP = { backgroundColor: '#fff', borderColor: '#dedee5', borderWidth: 1, padding: [10, 13], textStyle: { color: '#303036', fontSize: 12 }, extraCssText: 'box-shadow:0 5px 22px #24242816;border-radius:8px;line-height:1.8' };
 const chartPercent = (value: number | null) => value === null || !Number.isFinite(value) ? '—' : `${value.toLocaleString('en-US', { maximumSignificantDigits: 4 })}%`;
 
-function Chart({ option, label, onSelect, className = '' }: { option: EChartsOption; label: string; onSelect?: (id: string) => void; className?: string }) {
+export function Chart({ option, label, onSelect, className = '' }: { option: EChartsOption; label: string; onSelect?: (id: string) => void; className?: string }) {
   const element = useRef<HTMLDivElement>(null);
   const instance = useRef<echarts.EChartsType | null>(null);
   const callback = useRef(onSelect); callback.current = onSelect;
