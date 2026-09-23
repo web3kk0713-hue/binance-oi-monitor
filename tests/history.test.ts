@@ -75,11 +75,26 @@ describe('honest history comparisons', () => {
 });
 
 describe('collection-time history validity', () => {
-  it('uses the collection start minute despite varying completion duration', () => {
+  it('uses actual availability time despite varying completion duration, never the earlier start minute', () => {
     const row = asset();
     const first = toHistoryPoint(row, { startedAt: now - 10_000, asOf: now + 10_000 });
     const second = toHistoryPoint(row, { startedAt: now + 50_000, asOf: now + 55_000 });
-    expect(second.timestamp - first.timestamp).toBe(minute);
+    expect(first).toMatchObject({ timestamp: now + 10_000, availableAt: now + 10_000 });
+    expect(second).toMatchObject({ timestamp: now + 55_000, availableAt: now + 55_000 });
+    expect(second.timestamp - first.timestamp).toBe(45_000);
+  });
+  it('retains two half-minute observations and counts expected samples at their actual cadence', () => {
+    const input = [0, 30_000].map(offset => ({ ...point(now - offset), availableAt: now - offset, samplingIntervalMs: 30_000 }));
+    const result = analyzeHistory(input, 'test', 1, now);
+    expect(result.points.map(item => item.timestamp)).toEqual([now - 30_000, now]);
+    expect(result.expectedPoints).toBe(121);
+    expect(result.legacyPoints).toBe(0);
+    expect(result.coversWindow).toBe(false);
+  });
+  it('does not expose an observation whose actual availability is later than the query time', () => {
+    const result = analyzeHistory([{ ...point(now), availableAt: now + 1 }, point(now - 30_000)], 'test', 1, now);
+    expect(result.points).toHaveLength(1);
+    expect(result.latest?.timestamp).toBe(now - 30_000);
   });
   it('keeps valid OI but rejects expired supply independently', () => {
     const row = asset();

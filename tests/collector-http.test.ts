@@ -5,6 +5,40 @@ import { createSourceClient } from '../src/data/http';
 afterEach(() => { vi.useRealTimers(); });
 
 describe('source transport budgets and rate limits', () => {
+  it('applies a dynamically supplied weight budget before sending requests and resets the next minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_800_000_000_000);
+    const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
+    const request = createSourceClient(fetcher, 12);
+    request.setBinanceWeightLimit(10);
+    const signal = new AbortController().signal;
+    for (let i = 0; i < 8; i++) await request(`https://fapi.binance.com/fapi/v1/openInterest?symbol=TEST${i}`, signal);
+    await expect(request('https://fapi.binance.com/fapi/v1/openInterest?symbol=BLOCKED', signal)).rejects.toMatchObject({ code: 'RATE_LIMIT_BUDGET' });
+    expect(fetcher).toHaveBeenCalledTimes(8);
+    vi.setSystemTime(Date.now() + 60_000);
+    await request('https://fapi.binance.com/fapi/v1/openInterest?symbol=NEXT', signal);
+    expect(fetcher).toHaveBeenCalledTimes(9);
+  });
+
+  it('counts bulk mark/FX weights and upstream shared-IP usage, without throttling unrelated hosts', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
+    const request = createSourceClient(fetcher, 12);
+    request.setBinanceWeightLimit(25);
+    const signal = new AbortController().signal;
+    await request('https://fapi.binance.com/fapi/v1/premiumIndex', signal);
+    await request('https://fapi.binance.com/fapi/v1/assetIndex', signal);
+    await expect(request('https://fapi.binance.com/fapi/v1/openInterest?symbol=TEST', signal)).rejects.toMatchObject({ code: 'RATE_LIMIT_BUDGET' });
+    await request('https://example.org/supply', signal);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+
+    const busyFetcher = vi.fn(async () => Response.json({}, { headers: { 'x-mbx-used-weight-1m': '80' } })) as unknown as typeof fetch;
+    const sharedIp = createSourceClient(busyFetcher, 12);
+    sharedIp.setBinanceWeightLimit(100);
+    await sharedIp('https://fapi.binance.com/fapi/v1/exchangeInfo', signal);
+    await expect(sharedIp('https://fapi.binance.com/fapi/v1/openInterest?symbol=TEST', signal)).rejects.toMatchObject({ code: 'RATE_LIMIT_BUDGET' });
+    expect(busyFetcher).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds all concurrent requests and removes aborted queued requests', async () => {
     const releases: Array<() => void> = [];
     let active = 0;

@@ -1,5 +1,5 @@
 import Decimal from 'decimal.js';
-import type { AssetRow, Collector, CollectorOptions, ContractEvidence, Snapshot, SourceStamp, SupplyEvidence } from '../shared/types';
+import { COLLECTION_INTERVAL_MS, type AssetRow, type Collector, type CollectorOptions, type ContractEvidence, type Snapshot, type SourceStamp, type SupplyEvidence } from '../shared/types';
 import { IDENTITY_OVERRIDES, UNIT_ALIASES } from './aliases';
 import { createSourceClient } from './http';
 
@@ -14,6 +14,7 @@ const MINUTE = 60_000;
 const SUPPLY_REFRESH = 60 * MINUTE;
 const SUPPLY_MAX_AGE = 2 * SUPPLY_REFRESH;
 const MARKET_MAX_AGE = 90_000;
+const ROUND_BUDGET_MS = COLLECTION_INTERVAL_MS - 3_000;
 const MAX_PROVIDER_PRICE_DEVIATION = new Decimal('0.30');
 const STABLE_MARGIN = new Set(['USDT', 'USDC', 'USD1', 'U']);
 
@@ -77,8 +78,9 @@ export function createCollector(options: CollectorOptions = {}): Collector {
   // endpoints may be requested in direct mode, even when a caller supplies a key.
   const useCmc = mode === 'server' && typeof window === 'undefined';
   const key = useCmc ? options.cmcApiKey : undefined;
-  const requestedConcurrency = Number.isFinite(options.concurrency) ? Math.floor(options.concurrency!) : 6;
-  const request = createSourceClient(options.fetcher ?? fetch, Math.max(1, Math.min(6, requestedConcurrency)));
+  const requestedConcurrency = Number.isFinite(options.concurrency) ? Math.floor(options.concurrency!) : 12;
+  const concurrency = Math.max(1, Math.min(12, requestedConcurrency));
+  const request = createSourceClient(options.fetcher ?? fetch, concurrency);
   let universe: Cached<Contract[]> | undefined;
   let geckoMapping: Cached<GeckoTicker[]> | undefined;
   const supplies = new Map<string, Supply>();
@@ -209,7 +211,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     const externalAbort = () => controller.abort(roundOptions?.signal?.reason);
     roundOptions?.signal?.addEventListener('abort', externalAbort, { once: true });
     if (roundOptions?.signal?.aborted) controller.abort(roundOptions.signal.reason);
-    const timer = setTimeout(() => controller.abort(new Error('ROUND_BUDGET_55S')), 55_000);
+    const timer = setTimeout(() => controller.abort(new Error('ROUND_BUDGET_27S')), ROUND_BUDGET_MS);
     const signal = controller.signal;
     const errors: string[] = [];
     let prices: Premium[] = [];
@@ -223,8 +225,10 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         (async () => {
           if (universe && Date.now() - universe.fetchedAt < 15 * MINUTE) return;
           try {
-            const result = await request<{ symbols: Contract[] }>(EXCHANGE_URL, signal);
+            const result = await request<{ symbols: Contract[]; rateLimits?: Array<{ rateLimitType: string; interval: string; intervalNum: number; limit: number }> }>(EXCHANGE_URL, signal);
             if (!Array.isArray(result.symbols)) throw new Error('BINANCE_UNIVERSE_INVALID');
+            const weight = Array.isArray(result.rateLimits) ? result.rateLimits.find(limit => limit.rateLimitType === 'REQUEST_WEIGHT' && limit.interval === 'MINUTE' && limit.intervalNum === 1) : undefined;
+            if (weight) request.setBinanceWeightLimit(weight.limit);
             const eligible = result.symbols.filter(c => c.status === 'TRADING' && c.contractType === 'PERPETUAL' && c.underlyingType === 'COIN' && STABLE_MARGIN.has(c.marginAsset));
             if (eligible.length === 0) throw new Error('BINANCE_UNIVERSE_EMPTY');
             universe = { value: eligible, fetchedAt: Date.now() };
@@ -238,7 +242,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       let cursor = 0;
       let done = 0;
       let failed = 0;
-      const workers = Array.from({ length: Math.min(6, contracts.length) }, async () => {
+      const workers = Array.from({ length: Math.min(concurrency, contracts.length) }, async () => {
         while (cursor < contracts.length && !signal.aborted) {
           const contract = contracts[cursor++]!;
           const url = `${BINANCE}/fapi/v1/openInterest?symbol=${encodeURIComponent(contract.symbol)}`;
@@ -254,7 +258,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       await Promise.all([...workers, loadSupply(contracts, signal, errors)]);
       if (roundOptions?.signal?.aborted) throw new DOMException('采集已取消', 'AbortError');
       const asOf = Date.now();
-      if (signal.aborted) errors.push('ROUND_BUDGET: 本轮超过 55 秒，未取得的数据已标记缺失');
+      if (signal.aborted) errors.push('ROUND_BUDGET: 本轮超过 27 秒，未取得的数据已标记缺失；30 秒为目标间隔而非数据完整保证');
       const priceMap = new Map(prices.map(p => [p.symbol, p]));
       const fxMap = new Map(fx.map(p => [p.symbol, p]));
       const grouped = new Map<string, Contract[]>();
@@ -288,7 +292,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
           if (quoteUsd && !fresh(epoch(rate?.time), asOf, MARKET_MAX_AGE)) localIssues.push('美元汇率源时间过期');
           if (localIssues.length) issues.push(`${contract.symbol}: ${localIssues.join('；')}`);
           const oiUrl = `${BINANCE}/fapi/v1/openInterest?symbol=${encodeURIComponent(contract.symbol)}`;
-          return { symbol: contract.symbol, baseAsset: contract.baseAsset, quoteAsset: contract.quoteAsset, openInterest: oi?.data?.openInterest ?? null, markPrice: price?.markPrice ?? null, indexPrice: price?.indexPrice ?? null, quoteUsd: rate?.index ?? null, oiTime: epoch(oi?.data?.time), priceTime: epoch(price?.time), quoteTime: epoch(rate?.time), oiUsd: finite(value), ...(localIssues.length ? { error: localIssues.join('；') } : {}), sources: [stamp(EXCHANGE_URL, universe!.fetchedAt, null), stamp(oiUrl, oi?.observedAt ?? asOf, epoch(oi?.data?.time)), stamp(PRICE_URL, priceObservedAt, epoch(price?.time)), stamp(FX_URL, fxObservedAt, epoch(rate?.time))] };
+          return { symbol: contract.symbol, baseAsset: contract.baseAsset, quoteAsset: contract.quoteAsset, openInterest: oi?.data?.openInterest ?? null, markPrice: price?.markPrice ?? null, indexPrice: price?.indexPrice ?? null, quoteUsd: rate?.index ?? null, oiTime: epoch(oi?.data?.time), priceTime: epoch(price?.time), quoteTime: epoch(rate?.time), oiUsd: finite(value), unitMultiplier: UNIT_ALIASES[contract.baseAsset]?.multiplier ?? 1, ...(oi ? { oiObservedAt: oi.observedAt } : {}), ...(price ? { priceObservedAt } : {}), ...(rate ? { quoteObservedAt: fxObservedAt } : {}), ...(localIssues.length ? { error: localIssues.join('；') } : {}), sources: [stamp(EXCHANGE_URL, universe!.fetchedAt, null), stamp(oiUrl, oi?.observedAt ?? asOf, epoch(oi?.data?.time)), stamp(PRICE_URL, priceObservedAt, epoch(price?.time)), stamp(FX_URL, fxObservedAt, epoch(rate?.time))] };
         });
         const ordered = [...evidence].sort((a, b) => (a.quoteAsset === 'USDT' ? -1 : b.quoteAsset === 'USDT' ? 1 : a.symbol.localeCompare(b.symbol)));
         const reference = ordered.find(c => decimal(c.indexPrice) && decimal(c.quoteUsd) && fresh(c.priceTime, asOf, MARKET_MAX_AGE) && fresh(c.quoteTime ?? null, asOf, MARKET_MAX_AGE));
@@ -305,6 +309,8 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         if (identityCandidate && !providerPrice) issues.push('供应源缺少独立美元价格，无法核验身份与单位');
         else if (identityCandidate && !priceConsistent) issues.push(`供应源与 Binance 标准化价格不一致${priceDeviation ? `（偏差 ${priceDeviation.mul(100).toFixed(1)}% > 30%）` : ''}，映射待核实`);
         const oiSum = evidence.every(c => c.oiUsd !== null) ? evidence.reduce((sum, c) => sum.add(new Decimal(c.openInterest!).mul(c.markPrice!).mul(c.quoteUsd!)), new Decimal(0)) : null;
+        const oiQuantity = evidence.every(c => decimal(c.openInterest, true) && fresh(c.oiTime, asOf, MARKET_MAX_AGE))
+          ? evidence.reduce((sum, c) => sum.add(new Decimal(c.openInterest!).mul(c.unitMultiplier ?? 1)), new Decimal(0)) : null;
         const circulation = mappingVerified ? supply!.evidence.circulating : null;
         const max = mappingVerified ? supply!.evidence.max : null;
         if (max === null) issues.push('没有已核实的最大供应量，FDV 不可用');
@@ -315,12 +321,12 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         const complete = asOf - universe.fetchedAt < 15 * MINUTE && evidence.every(c => !c.error) && oiSum !== null && tokenPrice !== null;
         const alertEligible = complete && mappingVerified && !!supply && supplyFresh(supply) && !!fdv?.gt(0);
         const oldestOi = evidence.every(c => c.oiTime !== null) ? Math.min(...evidence.map(c => c.oiTime!)) : null;
-        assets.push({ id: `binance:${base}`, symbol: base, name: mappingVerified ? supply!.name : base, contracts: group.map(c => c.symbol), priceUsd: finite(tokenPrice), oiUsd: finite(oiSum), marketCapUsd: finite(cap), fdvUsd: finite(fdv), oiToFdv: oiSum && fdv?.gt(0) ? finite(oiSum.div(fdv).mul(100)) : null, oiToMarketCap: oiSum && cap?.gt(0) ? finite(oiSum.div(cap).mul(100)) : null, circulatingSupply: circulation, maxSupply: max, updatedAt: asOf, oiUpdatedAt: oldestOi, priceUpdatedAt: reference?.priceTime ?? null, supplyUpdatedAt: supply?.evidence.updatedAt || null, complete, alertEligible, issues: dedupe(issues), supplySource: supply?.evidence.provider ?? null, mappingStatus: mappingVerified ? 'verified' : 'unmapped', evidence: { contracts: evidence, supply: supply ? { ...supply.evidence, mappingUrl: identity?.url } : null, mapping: identity?.mapping ?? '未找到与 Binance 合约相符的可靠资产标识；不按重名或市值猜测。' } });
+        assets.push({ id: `binance:${base}`, symbol: base, name: mappingVerified ? supply!.name : base, contracts: group.map(c => c.symbol), priceUsd: finite(tokenPrice), oiUsd: finite(oiSum), oiQuantity: finite(oiQuantity), marketCapUsd: finite(cap), fdvUsd: finite(fdv), oiToFdv: oiSum && fdv?.gt(0) ? finite(oiSum.div(fdv).mul(100)) : null, oiToMarketCap: oiSum && cap?.gt(0) ? finite(oiSum.div(cap).mul(100)) : null, circulatingSupply: circulation, maxSupply: max, updatedAt: asOf, oiUpdatedAt: oldestOi, priceUpdatedAt: reference?.priceTime ?? null, supplyUpdatedAt: supply?.evidence.updatedAt || null, complete, alertEligible, issues: dedupe(issues), supplySource: supply?.evidence.provider ?? null, mappingStatus: mappingVerified ? 'verified' : 'unmapped', evidence: { contracts: evidence, supply: supply ? { ...supply.evidence, mappingUrl: identity?.url } : null, mapping: identity?.mapping ?? '未找到与 Binance 合约相符的可靠资产标识；不按重名或市值猜测。' } });
       }
       assets.sort((a, b) => (b.oiUsd ?? -1) - (a.oiUsd ?? -1));
       const failedContracts = assets.reduce((sum, a) => sum + a.evidence.contracts.filter(c => c.error).length, 0);
       if (failedContracts) errors.push(`BINANCE_PARTIAL: ${failedContracts}/${contracts.length} 个合约存在缺失或过期数据`);
-      return { schemaVersion: 1, mode, startedAt, asOf, durationMs: asOf - startedAt, universe: { contracts: contracts.length, assets: assets.length }, coverage: { oi: assets.filter(a => a.oiUsd !== null).length, marketCap: assets.filter(a => a.marketCapUsd !== null).length, fdv: assets.filter(a => a.fdvUsd !== null).length, eligible: assets.filter(a => a.alertEligible).length, failedContracts }, assets, errors: dedupe(errors) };
+      return { schemaVersion: 1, mode, startedAt, asOf, durationMs: asOf - startedAt, collectionIntervalMs: COLLECTION_INTERVAL_MS, universe: { contracts: contracts.length, assets: assets.length }, coverage: { oi: assets.filter(a => a.oiUsd !== null).length, marketCap: assets.filter(a => a.marketCapUsd !== null).length, fdv: assets.filter(a => a.fdvUsd !== null).length, eligible: assets.filter(a => a.alertEligible).length, failedContracts }, assets, errors: dedupe(errors) };
     } finally {
       clearTimeout(timer);
       roundOptions?.signal?.removeEventListener('abort', externalAbort);

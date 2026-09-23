@@ -1,4 +1,4 @@
-export function Icon({ name, size = 18, className = '' }: { name: 'refresh' | 'settings' | 'bell' | 'search' | 'close' | 'chevron' | 'source' | 'download' | 'external' | 'check' | 'warning' | 'star' | 'server' | 'arrow'; size?: number; className?: string }) {
+export function Icon({ name, size = 18, className = '' }: { name: 'refresh' | 'settings' | 'bell' | 'search' | 'close' | 'chevron' | 'source' | 'download' | 'external' | 'check' | 'warning' | 'star' | 'server' | 'arrow' | 'chart' | 'list'; size?: number; className?: string }) {
   const paths: Record<typeof name, React.ReactNode> = {
     refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.2 7a7 7 0 0 1 11.6-1L20 9M4 15l2.2 3A7 7 0 0 0 18 17"/></>,
     settings: <><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></>,
@@ -14,6 +14,8 @@ export function Icon({ name, size = 18, className = '' }: { name: 'refresh' | 's
     star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>,
     server: <><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.1M7 17.5h.1M12 6.5h5M12 17.5h5"/></>,
     arrow: <path d="M5 12h14m-6-6 6 6-6 6"/>,
+    chart: <><path d="M3 4v16h18M6 15l4-5 4 3 6-8"/><path d="M16 5h4v4"/></>,
+    list: <><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r=".5"/><circle cx="3.5" cy="12" r=".5"/><circle cx="3.5" cy="18" r=".5"/></>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>{paths[name]}</svg>;
 }

@@ -10,7 +10,7 @@ async function main() {
   await store.initialize();
   const initialSnapshot = await store.latest() ?? undefined;
   const { app } = await buildApp({ store, config, logger: true,
-    collector: createCollector({ mode: 'server', concurrency: 8, cmcApiKey: config.cmcApiKey, initialSnapshot }) });
+    collector: createCollector({ mode: 'server', concurrency: 12, cmcApiKey: config.cmcApiKey, initialSnapshot }) });
   const shutdown = async () => { await app.close(); };
   process.once('SIGINT', () => { void shutdown(); });
   process.once('SIGTERM', () => { void shutdown(); });

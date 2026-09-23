@@ -10,6 +10,23 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
   let active = 0;
   const waiters: Array<() => void> = [];
   const cooldowns = new Map<string, number>();
+  // A conservative bootstrap budget is replaced by exchangeInfo's current limit.
+  // Keep 20% free for metadata, other clients on the same IP, and in-flight requests.
+  let binanceLimit = 1200;
+  let weightMinute = -1;
+  let usedWeight = 0;
+  function refreshWeightWindow() {
+    const minute = Math.floor(Date.now() / 60_000);
+    if (minute !== weightMinute) { weightMinute = minute; usedWeight = 0; }
+  }
+  function reserveWeight(url: URL) {
+    if (url.hostname !== 'fapi.binance.com') return;
+    refreshWeightWindow();
+    const weight = !url.searchParams.has('symbol') && ['/fapi/v1/premiumIndex', '/fapi/v1/assetIndex'].includes(url.pathname) ? 10 : 1;
+    const budget = Math.floor(binanceLimit * 0.8);
+    if (usedWeight + weight > budget) throw new SourceError('RATE_LIMIT_BUDGET', url.href, `主动配额保护 ${usedWeight}/${budget}，本轮跳过，等待下一配额窗口`);
+    usedWeight += weight;
+  }
 
   async function acquire(signal: AbortSignal) {
     if (signal.aborted) throw new DOMException('采集已取消', 'AbortError');
@@ -33,8 +50,9 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
     else active--;
   }
 
-  return async function request<T>(url: string, signal: AbortSignal, headers?: Record<string, string>): Promise<T> {
-    const host = new URL(url).hostname;
+  async function request<T>(url: string, signal: AbortSignal, headers?: Record<string, string>): Promise<T> {
+    const target = new URL(url);
+    const host = target.hostname;
     const blockedUntil = cooldowns.get(host) ?? 0;
     if (Date.now() < blockedUntil) {
       throw new SourceError('RATE_LIMIT_COOLDOWN', url, `等待至 ${new Date(blockedUntil).toISOString()}`);
@@ -50,7 +68,14 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
       if (Date.now() < (cooldowns.get(host) ?? 0)) {
         throw new SourceError('RATE_LIMIT_COOLDOWN', url, '上游限流，本轮不重试');
       }
+      reserveWeight(target);
       const response = await fetcher(url, { signal: controller.signal, headers, cache: 'no-store' });
+      if (host === 'fapi.binance.com') {
+        refreshWeightWindow();
+        const header = response.headers.get('x-mbx-used-weight-1m');
+        const upstreamWeight = header === null ? NaN : Number(header);
+        if (Number.isFinite(upstreamWeight) && upstreamWeight >= 0) usedWeight = Math.max(usedWeight, upstreamWeight);
+      }
       if (!response.ok) {
         if (response.status === 429 || response.status === 418) {
           const retry = response.headers.get('retry-after');
@@ -71,5 +96,10 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number) {
       signal.removeEventListener('abort', abort);
       release();
     }
-  };
+  }
+  return Object.assign(request, {
+    setBinanceWeightLimit(limit: number) {
+      if (Number.isInteger(limit) && limit > 0 && limit <= 10_000_000) binanceLimit = limit;
+    },
+  });
 }

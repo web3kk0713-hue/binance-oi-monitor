@@ -49,6 +49,16 @@ export async function buildApp(options: AppOptions) {
       assetId: { type: 'string', minLength: 1, maxLength: 120, pattern: '^[\\p{L}\\p{N}:_-]+$' }, hours: { type: 'integer', minimum: 1, maximum: 720, default: 24 },
     } } }, config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async request => store.history(request.query.assetId, request.query.hours ?? 24, now()));
+  app.get<{ Params: { symbol: string }; Querystring: { hours?: number } }>('/api/v1/contracts/:symbol/history', {
+    schema: {
+      params: { type: 'object', additionalProperties: false, required: ['symbol'], properties: {
+        symbol: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[\\p{L}\\p{N}_-]+$' },
+      } },
+      querystring: { type: 'object', additionalProperties: false, properties: {
+        hours: { type: 'integer', minimum: 1, maximum: 168, default: 24 },
+      } },
+    }, config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async request => store.contractHistory(request.params.symbol, request.query.hours ?? 24, now()));
   app.get<{ Querystring: { limit?: number } }>('/api/v1/alerts', { schema: { querystring: { type: 'object', additionalProperties: false,
     properties: { limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 } } } } }, async request => store.alerts(request.query.limit));
   app.get('/api/v1/push/key', async () => ({ publicKey: push.publicKey }));

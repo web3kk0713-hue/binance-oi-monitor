@@ -1,4 +1,4 @@
-import type { AlertEvent, AlertState, HistoryPoint, Snapshot, Thresholds } from '../src/shared/types';
+import { COLLECTION_INTERVAL_MS, type AlertEvent, type AlertState, type HistoryPoint, type RawContractPoint, type Snapshot, type Thresholds } from '../src/shared/types';
 import { toHistoryPoint } from '../src/shared/history';
 import type { Database, SqlSession, SqlValue } from './database';
 
@@ -25,6 +25,11 @@ export class MonitorStore {
         oi_to_fdv DOUBLE PRECISION, oi_to_market_cap DOUBLE PRECISION, complete INTEGER NOT NULL,
         PRIMARY KEY(asset_id,timestamp))`,
       'CREATE INDEX IF NOT EXISTS monitor_history_time ON monitor_history(timestamp)',
+      `CREATE TABLE IF NOT EXISTS monitor_contract_history (symbol TEXT NOT NULL, available_at BIGINT NOT NULL,
+        open_interest TEXT, mark_price TEXT, index_price TEXT, quote_usd TEXT, unit_multiplier DOUBLE PRECISION NOT NULL,
+        oi_time BIGINT, price_time BIGINT, quote_time BIGINT, oi_observed_at BIGINT, price_observed_at BIGINT, quote_observed_at BIGINT,
+        PRIMARY KEY(symbol,available_at))`,
+      'CREATE INDEX IF NOT EXISTS monitor_contract_history_time ON monitor_contract_history(available_at)',
       'CREATE TABLE IF NOT EXISTS monitor_alerts (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, timestamp BIGINT NOT NULL, payload TEXT NOT NULL)',
       'CREATE INDEX IF NOT EXISTS monitor_alerts_time ON monitor_alerts(timestamp)',
       'CREATE TABLE IF NOT EXISTS monitor_states (scope TEXT NOT NULL, asset_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(scope,asset_id))',
@@ -39,12 +44,22 @@ export class MonitorStore {
     ];
     await this.db.transaction(async session => {
       for (const sql of statements) await session.query(sql);
-      // Additive migration: retain old raw values, but do not certify their unknown supply freshness.
-      if (this.db.kind === 'postgresql') await session.query('ALTER TABLE monitor_history ADD COLUMN IF NOT EXISTS validated INTEGER NOT NULL DEFAULT 0');
-      else {
-        const columns = await session.query('PRAGMA table_info(monitor_history)');
-        if (!columns.rows.some(column => column.name === 'validated')) await session.query('ALTER TABLE monitor_history ADD COLUMN validated INTEGER NOT NULL DEFAULT 0');
+      // Additive migration: preserve existing minute rows and their unknown availability/quantity.
+      const additions: Record<string, Record<string, string>> = {
+        monitor_history: { validated: 'INTEGER NOT NULL DEFAULT 0', available_at: 'BIGINT', oi_quantity: 'DOUBLE PRECISION',
+          price_usd: 'DOUBLE PRECISION', oi_source_time: 'BIGINT', price_source_time: 'BIGINT', sampling_interval_ms: 'BIGINT',
+          contract_set_key: 'TEXT', source_skew_ms: 'BIGINT' },
+        monitor_lease: { last_completed_at: 'BIGINT NOT NULL DEFAULT 0' },
+      };
+      for (const [table, fields] of Object.entries(additions)) {
+        const columns = this.db.kind === 'sqlite' ? (await session.query(`PRAGMA table_info(${table})`)).rows : [];
+        for (const [name, definition] of Object.entries(fields)) {
+          if (this.db.kind === 'postgresql') await session.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${name} ${definition}`);
+          else if (!columns.some(column => column.name === name)) await session.query(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+        }
       }
+      // Keep the old minute counter usable for a rollback; the new collector uses epoch boundaries.
+      await session.query("UPDATE monitor_lease SET last_completed_at=last_completed_slot*60000 WHERE id='collector' AND last_completed_at=0 AND last_completed_slot>=0");
     });
   }
   async latest(): Promise<Snapshot | null> {
@@ -77,13 +92,33 @@ export class MonitorStore {
         const rows = snapshot.assets.slice(offset, offset + 200).map(asset => {
           const first = values.length + 1;
           const point = toHistoryPoint(asset, snapshot);
-          values.push(point.assetId, point.timestamp, point.oiUsd, point.marketCapUsd, point.fdvUsd, point.oiToFdv, point.oiToMarketCap, point.complete ? 1 : 0, 1);
-          return `(${Array.from({ length: 9 }, (_, i) => `$${first + i}`).join(',')})`;
+          values.push(point.assetId, point.timestamp, point.oiUsd, point.marketCapUsd, point.fdvUsd, point.oiToFdv, point.oiToMarketCap, point.complete ? 1 : 0, 1,
+            point.availableAt ?? null, point.oiQuantity ?? null, point.priceUsd ?? null, point.oiSourceTime ?? null, point.priceSourceTime ?? null,
+            point.samplingIntervalMs ?? null, point.contractSetKey ?? null, point.sourceSkewMs ?? null);
+          return `(${Array.from({ length: 17 }, (_, i) => `$${first + i}`).join(',')})`;
         });
-        await session.query(`INSERT INTO monitor_history(asset_id,timestamp,oi_usd,market_cap_usd,fdv_usd,oi_to_fdv,oi_to_market_cap,complete,validated)
+        await session.query(`INSERT INTO monitor_history(asset_id,timestamp,oi_usd,market_cap_usd,fdv_usd,oi_to_fdv,oi_to_market_cap,complete,validated,
+          available_at,oi_quantity,price_usd,oi_source_time,price_source_time,sampling_interval_ms,contract_set_key,source_skew_ms)
           VALUES ${rows.join(',')} ON CONFLICT(asset_id,timestamp) DO UPDATE SET
           oi_usd=excluded.oi_usd,market_cap_usd=excluded.market_cap_usd,fdv_usd=excluded.fdv_usd,
-          oi_to_fdv=excluded.oi_to_fdv,oi_to_market_cap=excluded.oi_to_market_cap,complete=excluded.complete,validated=excluded.validated`, values);
+          oi_to_fdv=excluded.oi_to_fdv,oi_to_market_cap=excluded.oi_to_market_cap,complete=excluded.complete,validated=excluded.validated,
+          available_at=excluded.available_at,oi_quantity=excluded.oi_quantity,price_usd=excluded.price_usd,oi_source_time=excluded.oi_source_time,
+          price_source_time=excluded.price_source_time,sampling_interval_ms=excluded.sampling_interval_ms,contract_set_key=excluded.contract_set_key,source_skew_ms=excluded.source_skew_ms`, values);
+      }
+      const contracts = snapshot.assets.flatMap(asset => asset.evidence.contracts);
+      for (let offset = 0; offset < contracts.length; offset += 100) {
+        const values: SqlValue[] = [];
+        const rows = contracts.slice(offset, offset + 100).map(contract => {
+          const first = values.length + 1;
+          values.push(contract.symbol, snapshot.asOf, contract.openInterest, contract.markPrice, contract.indexPrice, contract.quoteUsd,
+            contract.unitMultiplier ?? 1, contract.oiTime, contract.priceTime, contract.quoteTime ?? null,
+            contract.oiObservedAt ?? null, contract.priceObservedAt ?? null, contract.quoteObservedAt ?? null);
+          return `(${Array.from({ length: 13 }, (_, i) => `$${first + i}`).join(',')})`;
+        });
+        // Original decimal strings are retained; a repeated commit of the same sample is idempotent.
+        await session.query(`INSERT INTO monitor_contract_history(symbol,available_at,open_interest,mark_price,index_price,quote_usd,
+          unit_multiplier,oi_time,price_time,quote_time,oi_observed_at,price_observed_at,quote_observed_at) VALUES ${rows.join(',')}
+          ON CONFLICT(symbol,available_at) DO NOTHING`, values);
       }
       await this.saveStates(session, 'global', states);
       for (const event of events) await session.query(`INSERT INTO monitor_alerts(id,asset_id,timestamp,payload)
@@ -101,14 +136,31 @@ export class MonitorStore {
   }
   async history(assetId: string, hours: number, now = Date.now()): Promise<HistoryPoint[]> {
     const result = await this.db.query(`SELECT * FROM monitor_history WHERE asset_id=$1 AND timestamp>=$2 AND timestamp<=$3
-      ORDER BY timestamp ASC LIMIT 43201`, [assetId, Math.floor(now / 60_000) * 60_000 - hours * 3_600_000, now]);
+      ORDER BY timestamp ASC LIMIT 86401`, [assetId, now - hours * 3_600_000, now]);
     const numberOrNull = (value: unknown) => value === null ? null : Number(value);
     return result.rows.map(row => ({ assetId: String(row.asset_id), timestamp: Number(row.timestamp),
       oiUsd: Number(row.complete) === 1 ? numberOrNull(row.oi_usd) : null,
       marketCapUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.market_cap_usd) : null,
       fdvUsd: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.fdv_usd) : null,
       oiToFdv: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_fdv) : null,
-      oiToMarketCap: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_market_cap) : null, complete: Number(row.complete) === 1 }));
+      oiToMarketCap: Number(row.complete) === 1 && Number(row.validated) === 1 ? numberOrNull(row.oi_to_market_cap) : null, complete: Number(row.complete) === 1,
+      ...(row.available_at == null ? {} : { availableAt: Number(row.available_at),
+        oiQuantity: Number(row.complete) === 1 ? numberOrNull(row.oi_quantity) : null,
+        priceUsd: Number(row.complete) === 1 ? numberOrNull(row.price_usd) : null,
+        oiSourceTime: numberOrNull(row.oi_source_time), priceSourceTime: numberOrNull(row.price_source_time),
+        ...(row.sampling_interval_ms == null ? {} : { samplingIntervalMs: Number(row.sampling_interval_ms) }),
+        ...(row.contract_set_key == null ? {} : { contractSetKey: String(row.contract_set_key) }), sourceSkewMs: numberOrNull(row.source_skew_ms) }) }));
+  }
+  async contractHistory(symbol: string, hours: number, now = Date.now()): Promise<RawContractPoint[]> {
+    const result = await this.db.query(`SELECT * FROM monitor_contract_history WHERE symbol=$1 AND available_at>=$2 AND available_at<=$3
+      ORDER BY available_at ASC LIMIT 20161`, [symbol, now - Math.min(168, Math.max(1, hours)) * 3_600_000, now]);
+    const numberOrNull = (value: unknown) => value == null ? null : Number(value);
+    const stringOrNull = (value: unknown) => value == null ? null : String(value);
+    return result.rows.map(row => ({ symbol: String(row.symbol), availableAt: Number(row.available_at),
+      openInterest: stringOrNull(row.open_interest), markPrice: stringOrNull(row.mark_price), indexPrice: stringOrNull(row.index_price),
+      quoteUsd: stringOrNull(row.quote_usd), unitMultiplier: Number(row.unit_multiplier), oiTime: numberOrNull(row.oi_time),
+      priceTime: numberOrNull(row.price_time), quoteTime: numberOrNull(row.quote_time), oiObservedAt: numberOrNull(row.oi_observed_at),
+      priceObservedAt: numberOrNull(row.price_observed_at), quoteObservedAt: numberOrNull(row.quote_observed_at) }));
   }
   async alerts(limit = 100): Promise<AlertEvent[]> {
     const result = await this.db.query('SELECT payload FROM monitor_alerts ORDER BY timestamp DESC,id ASC LIMIT $1', [limit]);
@@ -165,19 +217,20 @@ export class MonitorStore {
     await this.db.query('UPDATE monitor_push_outbox SET attempts=$1,next_attempt=$2 WHERE id=$3', [attempts, now + Math.min(300_000, 15_000 * 2 ** attempts), id]);
   }
   async acquireLease(owner: string, now = Date.now()): Promise<boolean> {
-    const slot = Math.floor(now / 60_000);
+    const slot = Math.floor(now / COLLECTION_INTERVAL_MS) * COLLECTION_INTERVAL_MS;
     const result = await this.db.query(`INSERT INTO monitor_lease(id,owner,expires_at,last_completed_slot) VALUES('collector',$1,$2,-1)
       ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at
-      WHERE monitor_lease.expires_at<=$3 AND monitor_lease.last_completed_slot<$4 RETURNING owner`, [owner, now + 120_000, now, slot]);
+      WHERE monitor_lease.expires_at<=$3 AND monitor_lease.last_completed_at<$4 RETURNING owner`, [owner, now + 120_000, now, slot]);
     return result.count === 1;
   }
   async renewLease(owner: string, now = Date.now()): Promise<boolean> {
     const result = await this.db.query("UPDATE monitor_lease SET expires_at=$1 WHERE id='collector' AND owner=$2 RETURNING owner", [now + 120_000, owner]);
     return result.count === 1;
   }
-  async releaseLease(owner: string, completedSlot: number | null) {
-    await this.db.query(`UPDATE monitor_lease SET owner='',expires_at=0,last_completed_slot=COALESCE($1,last_completed_slot)
-      WHERE id='collector' AND owner=$2`, [completedSlot, owner]);
+  async releaseLease(owner: string, completedAt: number | null) {
+    await this.db.query(`UPDATE monitor_lease SET owner='',expires_at=0,last_completed_at=COALESCE($1,last_completed_at),
+      last_completed_slot=COALESCE($2,last_completed_slot) WHERE id='collector' AND owner=$3`,
+    [completedAt, completedAt === null ? null : Math.floor(completedAt / 60_000), owner]);
   }
   async acquirePushLease(owner: string, now = Date.now()): Promise<boolean> {
     const result = await this.db.query(`INSERT INTO monitor_lease(id,owner,expires_at,last_completed_slot) VALUES('push',$1,$2,-1)
@@ -191,6 +244,7 @@ export class MonitorStore {
   async cleanup(now = Date.now()) {
     await this.db.transaction(async session => {
       await session.query('DELETE FROM monitor_history WHERE timestamp<$1', [now - 30 * DAY]);
+      await session.query('DELETE FROM monitor_contract_history WHERE available_at<$1', [now - 7 * DAY]);
       await session.query('DELETE FROM monitor_alerts WHERE timestamp<$1', [now - 30 * DAY]);
       await session.query('DELETE FROM monitor_push_outbox WHERE expires_at<=$1', [now]);
     });

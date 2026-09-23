@@ -42,7 +42,8 @@ describe('backend API boundaries on real disk storage', () => {
     if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
     const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/health`);
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ mode: 'server', storage: 'sqlite', pushEnabled: false, lastSuccess: null, retentionDays: 30 });
+    expect(await response.json()).toMatchObject({ mode: 'server', storage: 'sqlite', pushEnabled: false, lastSuccess: null,
+      retentionDays: 30, rawRetentionDays: 7, collectionIntervalMs: 30_000, lastDurationMs: null });
     expect((await app.inject('/api/v1/snapshot')).statusCode).toBe(503);
     expect((await app.inject('/api/v1/push/key')).json()).toEqual({ publicKey: null });
     const registration = await app.inject({ method: 'POST', url: '/api/v1/push/subscriptions', headers: { origin }, payload: { subscription: subscription(), thresholds: DEFAULT_THRESHOLDS } });
@@ -62,6 +63,41 @@ describe('backend API boundaries on real disk storage', () => {
       '/api/v1/history?assetId=cmc:1&unknown=1', '/api/v1/history?assetId=%27%3BDROP', '/api/v1/alerts?limit=10000']) {
       expect((await app.inject(url)).statusCode).toBe(400);
     }
+  });
+
+  it('bounds raw contract history to seven days and rejects unknown or unsafe parameters', async () => {
+    const { app } = await setup();
+    const valid = await app.inject({ url: '/api/v1/contracts/BTCUSDT/history?hours=168', headers: { origin } });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json()).toEqual([]);
+    expect(valid.headers['access-control-allow-origin']).toBe(origin);
+    expect((await app.inject(`/api/v1/contracts/${encodeURIComponent('我踏马来了USDT')}/history?hours=1`)).statusCode).toBe(200);
+    for (const url of ['/api/v1/contracts/BTCUSDT/history?hours=169', '/api/v1/contracts/BTCUSDT/history?hours=0',
+      '/api/v1/contracts/BTCUSDT/history?hours=1.5', '/api/v1/contracts/BTCUSDT/history?limit=1', '/api/v1/contracts/%27%3BDROP/history']) {
+      expect((await app.inject(url)).statusCode).toBe(400);
+    }
+  });
+
+  it('returns persisted original quantities and source/receive times over a real HTTP socket', async () => {
+    const { app, store } = await setup();
+    const now = Date.now();
+    const snapshot: Snapshot = { schemaVersion: 1, mode: 'server', startedAt: now - 100, asOf: now, durationMs: 100,
+      collectionIntervalMs: 30_000, universe: { assets: 1, contracts: 1 }, coverage: { oi: 1, marketCap: 0, fdv: 0, eligible: 0, failedContracts: 0 }, errors: [],
+      assets: [{ id: 'test:raw', symbol: 'RAW', name: 'Synthetic fixture', contracts: ['RAWUSDT'], priceUsd: 1, oiUsd: 2, oiQuantity: 2,
+        marketCapUsd: null, fdvUsd: null, oiToFdv: null, oiToMarketCap: null, circulatingSupply: null, maxSupply: null,
+        updatedAt: now, oiUpdatedAt: now - 500, priceUpdatedAt: now - 500, supplyUpdatedAt: null,
+        complete: true, alertEligible: false, issues: [], supplySource: null, mappingStatus: 'unmapped',
+        evidence: { mapping: 'Synthetic fixture', supply: null, contracts: [{ symbol: 'RAWUSDT', baseAsset: 'RAW', quoteAsset: 'USDT',
+          openInterest: '2.00000000000000000001', markPrice: '1', indexPrice: '1', quoteUsd: '1', unitMultiplier: 1,
+          oiTime: now - 500, priceTime: now - 500, quoteTime: now - 500, oiObservedAt: now - 50, priceObservedAt: now - 60, quoteObservedAt: now - 70, oiUsd: 2 }] } }] };
+    await store.commitCollection(snapshot, {}, []);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/contracts/RAWUSDT/history?hours=1`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject([{ symbol: 'RAWUSDT', availableAt: now, openInterest: '2.00000000000000000001',
+      oiTime: now - 500, oiObservedAt: now - 50, priceObservedAt: now - 60 }]);
   });
 
   it('requires allowed origin, validates push targets, and protects persisted subscription updates/deletes', async () => {

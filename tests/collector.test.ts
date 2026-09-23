@@ -4,6 +4,7 @@ import { createCollector } from '../src/data/collector';
 
 interface TestContract { symbol: string; baseAsset: string; quoteAsset: string; marginAsset?: string; underlyingType?: string; status?: string; contractType?: string; }
 interface FixtureOptions {
+  weightLimit?: number;
   contracts?: TestContract[];
   oi?: Record<string, string | number>;
   oiFailure?: string;
@@ -35,7 +36,8 @@ function fixture(options: FixtureOptions = {}) {
     calls.push(url.href);
     const now = Date.now();
     const data = (value: unknown) => Response.json(value);
-    if (url.pathname.endsWith('/exchangeInfo')) return data({ symbols: contracts.map(c => ({ status: 'TRADING', contractType: 'PERPETUAL', underlyingType: 'COIN', marginAsset: c.quoteAsset, ...c })) });
+    if (url.pathname.endsWith('/exchangeInfo')) return data({ symbols: contracts.map(c => ({ status: 'TRADING', contractType: 'PERPETUAL', underlyingType: 'COIN', marginAsset: c.quoteAsset, ...c })),
+      ...(options.weightLimit ? { rateLimits: [{ rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: options.weightLimit }] } : {}) });
     if (url.pathname.endsWith('/premiumIndex')) return data(contracts.map(c => ({ symbol: c.symbol, markPrice: options.mark?.[c.symbol] ?? '20000', indexPrice: options.mark?.[c.symbol] ?? '20000', time: now })));
     if (url.pathname.endsWith('/assetIndex')) return data([{ symbol: 'USDTUSD', index: '1', time: now }, { symbol: 'USDCUSD', index: '1.01', time: now }]);
     if (url.pathname.endsWith('/openInterest')) {
@@ -66,6 +68,16 @@ function fixture(options: FixtureOptions = {}) {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('official-source collector contract (fictional test fixtures)', () => {
+  it('uses exchangeInfo dynamic capacity for two full rounds inside one minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_800_000_000_000);
+    const f = fixture({ weightLimit: 2400, contracts: Array.from({ length: 500 }, (_, i) => ({ symbol: `BTCUSDT${i}`, baseAsset: 'BTC', quoteAsset: 'USDT' })) });
+    const collector = createCollector({ fetcher: f.fetcher });
+    expect((await collector.collect()).coverage.failedContracts).toBe(0);
+    vi.setSystemTime(Date.now() + 30_000);
+    expect((await collector.collect()).coverage.failedContracts).toBe(0);
+    expect(f.calls.filter(url => url.includes('/openInterest'))).toHaveLength(1000);
+  });
   it('accepts the CMC public gateway string success code observed in live responses', async () => {
     const row = (await createCollector({ mode: 'server', fetcher: fixture({ cmcSuccessCode: '0' }).fetcher }).collect()).assets[0]!;
     expect(row.supplySource).toBe('CoinMarketCap');
@@ -113,6 +125,8 @@ describe('official-source collector contract (fictional test fixtures)', () => {
     const snapshot = await createCollector({ fetcher: f.fetcher }).collect();
     expect(snapshot.universe).toEqual({ contracts: 2, assets: 1 });
     expect(snapshot.assets[0]!.oiUsd).toBe(301000);
+    expect(snapshot.assets[0]!.oiQuantity).toBe(15);
+    expect(snapshot.collectionIntervalMs).toBe(30_000);
     expect(snapshot.assets[0]!.fdvUsd).toBe(420000000000);
     expect(snapshot.assets[0]!.alertEligible).toBe(true);
     expect(snapshot.assets[0]!.evidence.contracts[1]!.quoteUsd).toBe('1.01');
@@ -125,6 +139,8 @@ describe('official-source collector contract (fictional test fixtures)', () => {
     expect(row.symbol).toBe('BONK');
     expect(row.priceUsd).toBe(0.25);
     expect(row.oiUsd).toBe(180000000);
+    expect(row.oiQuantity).toBe(720000000);
+    expect(row.evidence.contracts[0]).toMatchObject({ unitMultiplier: 1000, oiObservedAt: expect.any(Number), priceObservedAt: expect.any(Number), quoteObservedAt: expect.any(Number) });
     expect(row.marketCapUsd).toBe(25000000);
     expect(row.fdvUsd).toBe(250000000);
     expect(row.oiToFdv).toBe(72);
@@ -153,9 +169,33 @@ describe('official-source collector contract (fictional test fixtures)', () => {
     const f = fixture({ contracts: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT' }, { symbol: 'BTCUSDC', baseAsset: 'BTC', quoteAsset: 'USDC' }], oiFailure: 'BTCUSDC' });
     const snapshot = await createCollector({ fetcher: f.fetcher }).collect();
     expect(snapshot.assets[0]!.oiUsd).toBeNull();
+    expect(snapshot.assets[0]!.oiQuantity).toBeNull();
     expect(snapshot.assets[0]!.oiToFdv).toBeNull();
     expect(snapshot.assets[0]!.alertEligible).toBe(false);
     expect(snapshot.coverage.failedContracts).toBe(1);
+  });
+
+  it('stops an oversized slow round at 27 seconds and exposes missing data instead of inventing 30s samples', async () => {
+    vi.useFakeTimers();
+    const f = fixture({ contracts: Array.from({ length: 60 }, (_, i) => ({ symbol: `BTCUSDT${i}`, baseAsset: 'BTC', quoteAsset: 'USDT' })) });
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/openInterest') && url.searchParams.get('symbol') !== 'BTCUSDT0') {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+        });
+      }
+      return f.fetcher(input, init);
+    }) as unknown as typeof fetch;
+    const work = createCollector({ fetcher }).collect();
+    await vi.advanceTimersByTimeAsync(27_001);
+    const snapshot = await work;
+    expect(snapshot.durationMs).toBe(27_000);
+    expect(snapshot.collectionIntervalMs).toBe(30_000);
+    expect(snapshot.errors.some(error => error.includes('ROUND_BUDGET'))).toBe(true);
+    expect(snapshot.coverage.failedContracts).toBe(59);
+    expect(snapshot.assets[0]!.oiUsd).toBeNull();
+    expect(snapshot.assets[0]!.oiQuantity).toBeNull();
   });
 
   it('falls back on CMC 429 while honoring its Retry-After and retaining source provenance', async () => {

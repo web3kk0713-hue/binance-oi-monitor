@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import Decimal from 'decimal.js';
 import { createCollector } from '../src/data/collector';
-import type { Snapshot } from '../src/shared/types';
+import { COLLECTION_INTERVAL_MS, type Snapshot } from '../src/shared/types';
 
 const countArgument = process.argv.find(arg => arg.startsWith('--rounds='))?.split('=')[1];
 const rounds = Math.min(3, Math.max(1, Number(countArgument ?? 1)));
@@ -37,5 +37,5 @@ for (let round = 1; round <= rounds; round++) {
   await writeFile(`output/live-round-${round}.json`, JSON.stringify(snapshot));
   await writeFile('output/live-probe-summary.json', JSON.stringify(summaries, null, 2));
   if (formulaFailures.length || snapshot.coverage.oi === 0) process.exitCode = 1;
-  if (round < rounds) await new Promise(resolve => setTimeout(resolve, Math.max(2_000, 60_000 - (Date.now() - start))));
+  if (round < rounds) await new Promise(resolve => setTimeout(resolve, Math.max(2_000, COLLECTION_INTERVAL_MS - (Date.now() - start))));
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { evaluateAlerts } from '../src/shared/alerts';
-import { DEFAULT_THRESHOLDS, type BackendStatus, type Collector } from '../src/shared/types';
+import { COLLECTION_INTERVAL_MS, DEFAULT_THRESHOLDS, type BackendStatus, type Collector } from '../src/shared/types';
 import type { ServerConfig } from './config';
 import type { PushSender } from './push';
 import { MonitorStore, type SubscriptionEvaluation } from './store';
@@ -11,27 +11,33 @@ export class MonitorScheduler {
   private active: Promise<boolean> | null = null;
   private activePush: Promise<void> | null = null;
   private abort: AbortController | null = null;
-  private minuteTimer?: ReturnType<typeof setInterval>;
+  private collectionTimer?: ReturnType<typeof setInterval>;
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private pushTimer?: ReturnType<typeof setInterval>;
   private lastSuccess: number | null = null;
   private lastError: string | null = null;
+  private lastDurationMs: number | null = null;
   constructor(private store: MonitorStore, private collector: Collector, private push: PushSender,
     private config: ServerConfig, private now: () => number = Date.now) {}
 
-  async initialize() { this.lastSuccess = (await this.store.latest())?.asOf ?? null; }
+  async initialize() {
+    const latest = await this.store.latest();
+    this.lastSuccess = latest?.asOf ?? null;
+    this.lastDurationMs = latest?.durationMs ?? null;
+  }
   status(): BackendStatus {
     return { mode: 'server', version: '0.1.0', collecting: this.active !== null, lastSuccess: this.lastSuccess,
-      storage: this.store.kind, pushEnabled: this.push.enabled, retentionDays: 30, lastError: this.lastError };
+      storage: this.store.kind, pushEnabled: this.push.enabled, retentionDays: 30, lastError: this.lastError,
+      collectionIntervalMs: COLLECTION_INTERVAL_MS, lastDurationMs: this.lastDurationMs, rawRetentionDays: 7 };
   }
   start() {
-    if (this.minuteTimer) return;
+    if (this.collectionTimer) return;
     this.stopped = false;
     if (this.config.collectOnStart) void this.runOnce();
-    this.minuteTimer = setInterval(() => { void this.runOnce(); }, 60_000);
+    this.collectionTimer = setInterval(() => { void this.runOnce(); }, COLLECTION_INTERVAL_MS);
     this.pushTimer = setInterval(() => { void this.flushPush(); }, 15_000);
     this.cleanupTimer = setInterval(() => { void this.store.cleanup(this.now()).catch(() => { this.lastError = '历史清理暂未完成'; }); }, 3_600_000);
-    this.minuteTimer.unref(); this.pushTimer.unref(); this.cleanupTimer.unref();
+    this.collectionTimer.unref(); this.pushTimer.unref(); this.cleanupTimer.unref();
     void this.store.cleanup(this.now()).catch(() => { this.lastError = '历史清理暂未完成'; });
     void this.flushPush();
   }
@@ -43,7 +49,7 @@ export class MonitorScheduler {
   }
   private async collect(): Promise<boolean> {
     let acquired = false;
-    let completedSlot: number | null = null;
+    let completedAt: number | null = null;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let renewal: ReturnType<typeof setInterval> | undefined;
     const start = this.now();
@@ -63,6 +69,7 @@ export class MonitorScheduler {
         return false;
       }
       snapshot.mode = 'server';
+      snapshot.collectionIntervalMs = COLLECTION_INTERVAL_MS;
       const global = evaluateAlerts(snapshot, DEFAULT_THRESHOLDS, await this.store.states(), this.now());
       const evaluations: SubscriptionEvaluation[] = [];
       if (this.push.enabled) for (const subscription of await this.store.subscriptions()) {
@@ -72,7 +79,7 @@ export class MonitorScheduler {
       await this.store.commitCollection(snapshot, global.states, global.events, evaluations);
       this.lastSuccess = snapshot.asOf;
       this.lastError = snapshot.errors.length ? '部分源数据缺失，详见快照覆盖率' : null;
-      completedSlot = Math.floor(start / 60_000);
+      completedAt = Math.floor(start / COLLECTION_INTERVAL_MS) * COLLECTION_INTERVAL_MS;
       void this.flushPush();
       return true;
     } catch {
@@ -82,7 +89,10 @@ export class MonitorScheduler {
       if (timeout) clearTimeout(timeout);
       if (renewal) clearInterval(renewal);
       this.abort = null;
-      if (acquired) await this.store.releaseLease(this.owner, completedSlot).catch(() => {});
+      if (acquired) {
+        this.lastDurationMs = Math.max(0, this.now() - start);
+        await this.store.releaseLease(this.owner, completedAt).catch(() => {});
+      }
     }
   }
   async flushPush(): Promise<void> {
@@ -118,10 +128,10 @@ export class MonitorScheduler {
   }
   async stop() {
     this.stopped = true;
-    if (this.minuteTimer) clearInterval(this.minuteTimer);
+    if (this.collectionTimer) clearInterval(this.collectionTimer);
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     if (this.pushTimer) clearInterval(this.pushTimer);
-    this.minuteTimer = this.cleanupTimer = this.pushTimer = undefined;
+    this.collectionTimer = this.cleanupTimer = this.pushTimer = undefined;
     this.abort?.abort();
     await Promise.allSettled([this.active, this.activePush].filter(Boolean));
     this.push.close?.();

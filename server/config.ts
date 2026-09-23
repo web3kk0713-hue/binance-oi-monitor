@@ -1,3 +1,5 @@
+import { COLLECTION_INTERVAL_MS } from '../src/shared/types';
+
 export interface ServerConfig {
   host: string; port: number; allowedOrigins: string[];
   databaseUrl?: string; sqlitePath: string; cmcApiKey?: string;
@@ -35,7 +37,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vapidPublicKey: env.VAPID_PUBLIC_KEY || undefined, vapidPrivateKey: env.VAPID_PRIVATE_KEY || undefined,
     vapidSubject: env.VAPID_SUBJECT || undefined, notificationUrl,
     collectOnStart: env.COLLECT_ON_START !== 'false',
-    collectionTimeoutMs: integer(env.COLLECTION_TIMEOUT_MS, 55_000, 1000, 110_000),
+    // Existing 55s configurations remain readable, but cannot extend a 30s round.
+    collectionTimeoutMs: Math.min(COLLECTION_INTERVAL_MS - 1_000, integer(env.COLLECTION_TIMEOUT_MS, 29_000, 1000, 110_000)),
     maxSubscriptions: integer(env.MAX_SUBSCRIPTIONS, 1000, 1, 10_000),
   };
 }
