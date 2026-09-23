@@ -185,7 +185,7 @@ export default function App() {
   const snapshotStale = Boolean(monitor.snapshot && now - monitor.snapshot.asOf > 90_000);
   const favorites = useMemo(() => new Set(settings.favorites), [settings.favorites]);
   const alertCount = assets.filter((row) => row.alertEligible && current(row, now) && (row.oiToFdv ?? -1) >= settings.thresholds.warning).length;
-  const totalOi = assets.reduce((sum, row) => sum + (row.oiUsd ?? 0), 0);
+  const totalOi = assets.some(row => row.oiUsd !== null) ? assets.reduce((sum, row) => sum + (row.oiUsd ?? 0), 0) : null;
   const filtered = useMemo(() => {
     const search = deferredQuery.trim().toLowerCase();
     return assets.filter((row) => (!search || `${row.symbol} ${row.name} ${row.contracts.join(' ')}`.toLowerCase().includes(search))
