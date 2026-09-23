@@ -6,6 +6,7 @@ import { createECDH, randomBytes } from 'node:crypto';
 import { SqliteDatabase } from '../server/database';
 import { MonitorStore } from '../server/store';
 import { MonitorScheduler } from '../server/scheduler';
+import { displayedAsset } from '../src/shared/reliability';
 import { loadConfig } from '../server/config';
 import { hashSecret, type PushSender } from '../server/push';
 import { DEFAULT_THRESHOLDS, type AlertEvent, type Snapshot } from '../src/shared/types';
@@ -42,6 +43,60 @@ afterEach(async () => {
 });
 
 describe('real SQLite persistence and scheduling', () => {
+  it('persists a failed observation separately from last-good display values and restores cooldown across a real restart', async () => {
+    const path = temporaryPath();
+    let clock = 1_800_000_000_000;
+    let fail = false;
+    const initialTime = clock, deadline = clock + 180_000;
+    const collector = { collect: vi.fn(async () => {
+      const snapshot = sample(clock, fail ? 120 : 95);
+      snapshot.assets[0].evidence.supply!.providerPriceUsd = 1;
+      if (fail) {
+        Object.assign(snapshot.assets[0], { oiUsd: null, oiQuantity: null, oiToFdv: null, oiToMarketCap: null,
+          complete: false, alertEligible: false, oiUpdatedAt: null });
+        Object.assign(snapshot.assets[0].evidence.contracts[0], { openInterest: null, oiTime: null, oiUsd: null });
+        snapshot.coverage.oi = 0; snapshot.coverage.eligible = 0; snapshot.coverage.failedContracts = 1;
+        snapshot.errors = ['Synthetic HTTP_429']; snapshot.retryAt = deadline;
+      }
+      return snapshot;
+    }) };
+    const first = await open(path);
+    const scheduler = new MonitorScheduler(first, collector, disabledPush, loadConfig({}), () => clock);
+    schedulers.push(scheduler); await scheduler.initialize();
+    expect(await scheduler.runOnce()).toBe(true);
+    expect(await first.alerts()).toHaveLength(1);
+    fail = true; clock += 30_000;
+    expect(await scheduler.runOnce()).toBe(false);
+    const latest = (await first.latest())!;
+    expect(latest).toMatchObject({ asOf: clock, coverage: { oi: 0 }, retryAt: deadline });
+    expect(latest.assets[0]).toMatchObject({ oiUsd: null, complete: false });
+    expect(displayedAsset(latest.assets[0], latest)).toMatchObject({ values: { oiUsd: 95, fdvUsd: 100 }, retainedAt: initialTime });
+    expect((await first.history('test:1', 1, clock)).map(point => point.oiUsd)).toEqual([95, null]);
+    expect((await first.contractHistory('TESTUSDT', 1, clock)).map(point => point.openInterest)).toEqual(['95', null]);
+    expect(await first.alerts()).toHaveLength(1);
+    expect(scheduler.status().lastSuccess).toBe(initialTime);
+    await scheduler.stop(); await close(first);
+
+    const reopened = await open(path);
+    const restored = new MonitorScheduler(reopened, collector, disabledPush, loadConfig({}), () => clock);
+    schedulers.push(restored); await restored.initialize();
+    expect(restored.status()).toMatchObject({ lastSuccess: initialTime, retryAt: deadline });
+    clock += 60_000; expect(await restored.runOnce()).toBe(false);
+    expect(collector.collect).toHaveBeenCalledTimes(2);
+    const cached = (await reopened.latest())!;
+    expect(displayedAsset(cached.assets[0], cached).retainedAt).toBe(initialTime);
+    expect(await reopened.history('test:1', 1, clock)).toHaveLength(2);
+
+    fail = false; clock = deadline;
+    expect(await restored.runOnce()).toBe(true);
+    const recovered = (await reopened.latest())!;
+    expect(displayedAsset(recovered.assets[0], recovered).retainedAt).toBeNull();
+    expect(recovered.lastGood?.['test:1'].timestamp).toBe(deadline);
+    expect((await reopened.history('test:1', 1, clock)).map(point => point.oiUsd)).toEqual([95, null, 95]);
+    expect(restored.status()).toMatchObject({ lastSuccess: deadline, retryAt: 0 });
+    expect(await reopened.alerts()).toHaveLength(1);
+  });
+
   it('retains three/seven-day values across restart without recalculating old FDV', async () => {
     const path = temporaryPath();
     const clock = Math.floor(Date.now() / 60_000) * 60_000 + 1_000;

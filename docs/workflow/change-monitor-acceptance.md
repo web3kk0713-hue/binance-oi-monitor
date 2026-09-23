@@ -2,6 +2,8 @@
 
 日期：2026-09-23。用户已确认各自涨跌幅口径及既有GitHub部署目标。保持React/TypeScript、ECharts、Fastify及现有历史库；无新增依赖、云资源或机器后台服务。
 
+后续更新：下方“本次未修复collector可靠性”是变化页首次发布时的历史记录；后续修复与当前限制见 [采集恢复验收](collector-reliability-acceptance.md)。常驻云后台仍未部署。
+
 ## 已实现
 
 - 新导航“变化监控”，直达 `?view=changes`。观察窗口1–10080整数分钟；OI与FDV独立启用、填写阈值及选择上涨／下跌／双向，AND／OR组合。默认5分钟、数量OI双向5%、FDV双向3%、AND。

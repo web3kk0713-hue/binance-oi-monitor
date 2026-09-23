@@ -1,5 +1,6 @@
 import { lazy, Suspense, useDeferredValue, useMemo, useState, type FormEvent } from 'react';
 import { DEFAULT_CHANGE_RULE, isChangeRule, type ChangeCondition, type ChangeDirection, type ChangeRule } from '../shared/changeMonitor';
+import { displayedAsset } from '../shared/reliability';
 import type { Snapshot } from '../shared/types';
 import { clockTime, dateTime, money, signed } from './format';
 import { readLocal, writeLocal, type Settings } from './storage';
@@ -30,7 +31,7 @@ const quantity = (value: number | null | undefined) => value == null || !Number.
 const PAGE_SIZE = 25;
 const magnitude = (value: number | null) => value === null ? -1 : Math.abs(value);
 export function changeSourceCooldown(snapshot: Snapshot | null, now: number): number {
-  const until = Math.max(0, ...(snapshot?.errors ?? []).flatMap(error => {
+  const until = Math.max(0, Number.isFinite(snapshot?.retryAt) ? snapshot!.retryAt! : 0, ...(snapshot?.errors ?? []).flatMap(error => {
     if (!error.includes('RATE_LIMIT_COOLDOWN')) return [];
     const match = error.match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
     const time = match ? Date.parse(match[0]) : NaN;
@@ -39,9 +40,9 @@ export function changeSourceCooldown(snapshot: Snapshot | null, now: number): nu
   return Math.max(0, Math.ceil((until - now) / 1000));
 }
 
-export default function ChangeDashboard({ settings, snapshot, historyVersion, error, storageError, collecting, onRefresh, onOpenSettings }: {
+export default function ChangeDashboard({ settings, snapshot, historyVersion, error, storageError, collecting, retryAt = 0, onRefresh, onOpenSettings }: {
   settings: Settings; snapshot: Snapshot | null; historyVersion: number; error: string | null; storageError: string | null;
-  collecting: boolean; onRefresh: () => void; onOpenSettings: () => void;
+  collecting: boolean; retryAt: number; onRefresh: () => void; onOpenSettings: () => void;
 }) {
   const [rule, setRule] = useState(readChangeRule);
   const [draft, setDraft] = useState(() => toDraft(rule));
@@ -53,6 +54,8 @@ export default function ChangeDashboard({ settings, snapshot, historyVersion, er
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const monitor = useChangeMonitor(snapshot, settings, rule, historyVersion);
+  const displayById = useMemo(() => new Map((snapshot?.assets ?? []).map(asset => [asset.id, displayedAsset(asset, snapshot)])), [snapshot]);
+  const retainedCount = [...displayById.values()].filter(display => display.retainedAt !== null).length;
   const searched = useMemo(() => monitor.rows.filter(row => !search || row.symbol.toUpperCase().includes(search)), [monitor.rows, search]);
   const hits = searched.filter(row => row.matched).length;
   const unavailable = searched.filter(row => !row.evaluable).length;
@@ -65,7 +68,8 @@ export default function ChangeDashboard({ settings, snapshot, historyVersion, er
   const oiLabel = rule.oiBasis === 'quantity' ? 'OI 数量' : 'OI 金额';
   const stale = Boolean(snapshot && monitor.now - snapshot.asOf > 90_000);
   const partial = Boolean(snapshot && (snapshot.coverage.failedContracts > 0 || snapshot.coverage.oi < snapshot.universe.assets));
-  const cooldown = changeSourceCooldown(snapshot, monitor.now);
+  const displayNow = Date.now();
+  const cooldown = Math.max(changeSourceCooldown(snapshot, displayNow), Math.max(0, Math.ceil((retryAt - displayNow) / 1000)));
   function apply(event: FormEvent) {
     event.preventDefault(); const next = parseChangeDraft(draft);
     if (!next) { setFormError('请启用至少一项条件，窗口填 1–10080 整数分钟，阈值填 0–1000000。'); return; }
@@ -84,8 +88,9 @@ export default function ChangeDashboard({ settings, snapshot, historyVersion, er
   return <main className="workspace change-monitor">
     <div className="connection-bar"><span className="connection-badge"><i className={`status-dot ${error || stale || partial || !snapshot ? 'warning-dot' : ''}`}/>{settings.mode === 'direct' ? '浏览器采集' : '后台模式'}</span><span className="change-connection-note">{settings.mode === 'direct' ? '关页或休眠会中断；沿用本机真实历史' : '使用已配置后台的观测历史'}</span><button onClick={onOpenSettings}>连接设置</button></div>
     <div className="page-heading"><div><h1>OI / FDV 变化监控</h1><p>自定义涨跌幅，筛出达到条件的标的。</p></div><div className="refresh-controls"><div className="refresh-meta"><strong>{snapshot ? clockTime(snapshot.asOf) : '等待数据'}</strong><span>{cooldown ? `源接口冷却 ${cooldown}s` : collecting ? '正在更新' : 'OI 目标 30 秒采样'}</span></div><button className="button secondary" onClick={() => { onRefresh(); monitor.refresh(); }} disabled={collecting || cooldown > 0}>刷新</button></div></div>
-    {error || storageError || monitor.error || stale ? <div className="status-message stale-message" role="alert">{error || monitor.error || (stale ? '行情已过期，暂停命中判断。' : storageError)}{error && storageError ? ` ${storageError}` : ''}</div> : null}
-    {snapshot ? <div className="change-source-status" role="status"><span>本轮合约完整 {Math.max(0, snapshot.universe.contracts - snapshot.coverage.failedContracts)} / {snapshot.universe.contracts}</span><span>OI 有值 {snapshot.coverage.oi} / {snapshot.universe.assets} 币种</span><span>FDV 有值 {snapshot.coverage.fdv} / {snapshot.universe.assets} 币种</span>{cooldown ? <strong>币安限流冷却中，刷新无法跳过；暂停缺失项判断。</strong> : null}<details><summary>缺失原因与源状态</summary><p>合约数与合并后的币种数不同。金额有值不等于已有所选窗口的有效起点；FDV 无可靠最大供应量或身份映射时留空。</p>{snapshot.errors.map((issue, index) => <p key={index}>{issue}</p>)}<ul>{snapshot.assets.filter(asset => asset.issues.length).slice(0, 30).map(asset => <li key={asset.id}>{asset.symbol}：{asset.issues.join('；')}</li>)}</ul><p>最多列出 30 个币种；比较起点问题见下方“数据不足”。</p></details></div> : null}
+    {cooldown > 0 ? <div className="source-retry-note" role="status">源接口冷却中，{cooldown} 秒后自动重试；手动刷新不会跳过冷却。</div> : null}
+    {error || storageError || monitor.error || stale ? <div className="status-message stale-message" role="alert">{error ? `${settings.mode === 'server' ? '后台数据状态' : '本机采集状态'}：${error}` : monitor.error || (stale ? `${settings.mode === 'server' ? '后台快照' : '本机行情'}已过期，暂停命中判断。` : storageError)}{error && storageError ? ` ${storageError}` : ''}</div> : null}
+    {snapshot ? <div className="change-source-status" role="status"><span>本轮合约完整 {Math.max(0, snapshot.universe.contracts - snapshot.coverage.failedContracts)} / {snapshot.universe.contracts}</span><span>本轮 OI 有值 {snapshot.coverage.oi} / {snapshot.universe.assets} 币种</span><span>本轮 FDV 有值 {snapshot.coverage.fdv} / {snapshot.universe.assets} 币种</span>{retainedCount > 0 ? <strong>保留旧值 {retainedCount} 个币种，不用于变化、命中或告警。</strong> : null}<details><summary>缺失原因与源状态</summary><p>合约数与合并后的币种数不同。金额有值不等于已有所选窗口的有效起点；FDV 无可靠最大供应量或身份映射时留空。标为“上次有效”的数值仅供参考，不计入本轮覆盖率。</p>{snapshot.errors.map((issue, index) => <p key={index}>{issue}</p>)}<ul>{snapshot.assets.filter(asset => asset.issues.length).slice(0, 30).map(asset => <li key={asset.id}>{asset.symbol}：{asset.issues.join('；')}</li>)}</ul><p>最多列出 30 个币种；比较起点问题见下方“数据不足”。</p></details></div> : null}
     <form className="change-controls" aria-label="变化监控参数" onSubmit={apply} onChange={() => setFormError('')}>
       <div className="change-options"><label>观察窗口<span className="change-number"><input aria-label="观察窗口分钟" type="number" min="1" max="10080" step="1" required value={draft.window} onChange={event => setDraft(previous => ({ ...previous, window: event.target.value }))}/><span>分钟</span></span></label>
         <div className="change-presets" aria-label="窗口快捷选择">{[{ label: '5m', value: 5 }, { label: '1h', value: 60 }, { label: '24h', value: 1440 }, { label: '7d', value: 10080 }].map(item => <button type="button" key={item.value} aria-pressed={Number(draft.window) === item.value} onClick={() => setDraft(previous => ({ ...previous, window: String(item.value) }))}>{item.label}</button>)}</div>
@@ -98,8 +103,14 @@ export default function ChangeDashboard({ settings, snapshot, historyVersion, er
     </form>
     <section className="change-results" aria-label="变化监控结果">
       <div className="change-results-head"><div className="change-tabs">{([{ key: 'hit', label: '命中', count: hits }, { key: 'all', label: '全部', count: searched.length }, { key: 'unavailable', label: '数据不足', count: unavailable }] as const).map(item => <button key={item.key} aria-pressed={scope === item.key} onClick={() => { setScope(item.key); setPage(1); }}>{item.label}<span>{monitor.loading ? '…' : item.count}</span></button>)}</div><label className="change-search"><span className="sr-only">搜索监控币种</span><input aria-label="搜索监控币种" placeholder="搜索币种" value={query} onChange={event => { setQuery(event.target.value); setPage(1); }}/></label></div>
-      <div className="change-table-scroll"><table><thead><tr><th>币种</th><th><button onClick={() => setSort('oi')} aria-label="按OI变化幅度排序">{oiLabel}变化 {sort === 'oi' ? '↓' : ''}</button></th><th><button onClick={() => setSort('fdv')} aria-label="按FDV变化幅度排序">FDV 变化 {sort === 'fdv' ? '↓' : ''}</button></th><th>当前 {oiLabel}</th><th>当前 FDV</th><th>实际比较时刻</th><th>判断</th></tr></thead><tbody>
-        {!monitor.loading ? filtered.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE).map(row => <tr key={row.assetId} className={`${row.matched ? 'change-hit-row' : ''} ${selected?.assetId === row.assetId ? 'change-selected-row' : ''}`}><td><button className="change-asset" aria-pressed={selected?.assetId === row.assetId} onClick={() => setSelectedId(row.assetId)}>{row.symbol}</button></td><td className={changeClass(row.oiPct)}><strong>{signed(row.oiPct, '%', 3)}</strong>{row.oiMatched === true ? <span className="change-hit-mark">达标</span> : null}</td><td className={changeClass(row.fdvPct)}><strong>{signed(row.fdvPct, '%', 3)}</strong>{row.fdvMatched === true ? <span className="change-hit-mark">达标</span> : null}</td><td>{rule.oiBasis === 'quantity' ? <>{quantity(row.latest.oiQuantity)}<small className="change-unit">{row.symbol}</small></> : money(row.latest.oiUsd)}</td><td>{money(row.latest.fdvUsd)}</td><td className="change-time" title={`${dateTime(row.startAt)} — ${dateTime(row.endAt)}`}>{row.startAt ? `${clockTime(row.startAt)} → ${clockTime(row.endAt)}` : '缺少起点'}</td><td><span className={`change-status ${row.status}`} title={row.reason}>{row.matched ? '命中' : row.evaluable ? '未达标' : '不可比较'}</span><small className="change-reason">{row.reason}</small></td></tr>) : null}
+      <div className="change-table-scroll"><table><thead><tr><th>币种</th><th><button onClick={() => setSort('oi')} aria-label="按OI变化幅度排序">{oiLabel}变化 {sort === 'oi' ? '↓' : ''}</button></th><th><button onClick={() => setSort('fdv')} aria-label="按FDV变化幅度排序">FDV 变化 {sort === 'fdv' ? '↓' : ''}</button></th><th>{retainedCount ? '最近可用' : '当前'} {oiLabel}</th><th>{retainedCount ? '最近可用' : '当前'} FDV</th><th>实际比较时刻</th><th>判断</th></tr></thead><tbody>
+        {!monitor.loading ? filtered.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE).map(row => {
+          const display = displayById.get(row.assetId);
+          const values = display?.values ?? row.latest;
+          const retainedAt = display?.retainedAt;
+          const retainedNote = retainedAt != null ? <small className="retained-value-note" title={dateTime(retainedAt)}>上次有效 {clockTime(retainedAt)}（非实时）</small> : null;
+          return <tr key={row.assetId} className={`${row.matched ? 'change-hit-row' : ''} ${selected?.assetId === row.assetId ? 'change-selected-row' : ''}`}><td><button className="change-asset" aria-pressed={selected?.assetId === row.assetId} onClick={() => setSelectedId(row.assetId)}>{row.symbol}</button></td><td className={changeClass(row.oiPct)}><strong>{signed(row.oiPct, '%', 3)}</strong>{row.oiMatched === true ? <span className="change-hit-mark">达标</span> : null}</td><td className={changeClass(row.fdvPct)}><strong>{signed(row.fdvPct, '%', 3)}</strong>{row.fdvMatched === true ? <span className="change-hit-mark">达标</span> : null}</td><td>{rule.oiBasis === 'quantity' ? <>{quantity(values.oiQuantity)}<small className="change-unit">{row.symbol}</small>{values.oiQuantity != null ? retainedNote : null}</> : <>{money(values.oiUsd)}{values.oiUsd != null ? retainedNote : null}</>}</td><td>{money(values.fdvUsd)}{values.fdvUsd != null ? retainedNote : null}</td><td className="change-time" title={`${dateTime(row.startAt)} — ${dateTime(row.endAt)}`}>{row.startAt ? `${clockTime(row.startAt)} → ${clockTime(row.endAt)}` : '缺少起点'}</td><td><span className={`change-status ${row.status}`} title={row.reason}>{row.matched ? '命中' : row.evaluable ? '未达标' : '不可比较'}</span><small className="change-reason">{row.reason}</small></td></tr>;
+        }) : null}
       </tbody></table></div>
       {monitor.loading || !filtered.length ? <div className="change-empty" role="status"><strong>{monitor.loading ? '读取历史比较起点…' : !snapshot ? '等待首轮真实行情' : scope === 'hit' ? '当前没有符合条件的标的' : '当前范围没有标的'}</strong><span>{monitor.loading ? '不会沿用其他窗口的旧结果。' : scope === 'hit' ? '可切换“全部”查看涨跌幅，或“数据不足”查看无法判断的原因。' : '更换搜索或筛选范围。'}</span></div> : null}
       <div className="change-pagination"><span>仅描述起止观测的净变化，不证明中间连续走势；缺失值显示 —</span><div><button disabled={activePage === 1} onClick={() => setPage(activePage - 1)}>上一页</button><span>{activePage} / {pages}</span><button disabled={activePage === pages} onClick={() => setPage(activePage + 1)}>下一页</button></div></div>

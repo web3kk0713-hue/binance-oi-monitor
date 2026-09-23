@@ -68,7 +68,8 @@ export class MonitorStore {
         monitor_history: { validated: 'INTEGER NOT NULL DEFAULT 0', available_at: 'BIGINT', oi_quantity: 'DOUBLE PRECISION',
           price_usd: 'DOUBLE PRECISION', oi_source_time: 'BIGINT', price_source_time: 'BIGINT', sampling_interval_ms: 'BIGINT',
           contract_set_key: 'TEXT', source_skew_ms: 'BIGINT' },
-        monitor_lease: { last_completed_at: 'BIGINT NOT NULL DEFAULT 0' },
+        monitor_lease: { last_completed_at: 'BIGINT NOT NULL DEFAULT 0', last_attempt_at: 'BIGINT NOT NULL DEFAULT 0',
+          retry_at: 'BIGINT NOT NULL DEFAULT 0', last_success_at: 'BIGINT NOT NULL DEFAULT 0' },
       };
       for (const [table, fields] of Object.entries(additions)) {
         const columns = this.db.kind === 'sqlite' ? (await session.query(`PRAGMA table_info(${table})`)).rows : [];
@@ -231,19 +232,30 @@ export class MonitorStore {
   }
   async acquireLease(owner: string, now = Date.now()): Promise<boolean> {
     const slot = Math.floor(now / COLLECTION_INTERVAL_MS) * COLLECTION_INTERVAL_MS;
-    const result = await this.db.query(`INSERT INTO monitor_lease(id,owner,expires_at,last_completed_slot) VALUES('collector',$1,$2,-1)
-      ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at
-      WHERE monitor_lease.expires_at<=$3 AND monitor_lease.last_completed_at<$4 RETURNING owner`, [owner, now + 120_000, now, slot]);
+    const result = await this.db.query(`INSERT INTO monitor_lease(id,owner,expires_at,last_completed_slot,last_attempt_at) VALUES('collector',$1,$2,-1,$3)
+      ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at,last_attempt_at=excluded.last_attempt_at
+      WHERE monitor_lease.expires_at<=$3 AND monitor_lease.last_completed_at<$4
+      AND monitor_lease.last_attempt_at<$4 AND monitor_lease.retry_at<=$3 RETURNING owner`, [owner, now + 120_000, now, slot]);
     return result.count === 1;
   }
   async renewLease(owner: string, now = Date.now()): Promise<boolean> {
     const result = await this.db.query("UPDATE monitor_lease SET expires_at=$1 WHERE id='collector' AND owner=$2 RETURNING owner", [now + 120_000, owner]);
     return result.count === 1;
   }
-  async releaseLease(owner: string, completedAt: number | null) {
+  async releaseLease(owner: string, completedAt: number | null, retryAt = 0, successAt: number | null = null) {
     await this.db.query(`UPDATE monitor_lease SET owner='',expires_at=0,last_completed_at=COALESCE($1,last_completed_at),
-      last_completed_slot=COALESCE($2,last_completed_slot) WHERE id='collector' AND owner=$3`,
-    [completedAt, completedAt === null ? null : Math.floor(completedAt / 60_000), owner]);
+      last_completed_slot=COALESCE($2,last_completed_slot),retry_at=CASE WHEN retry_at>$4 THEN retry_at ELSE $4 END,
+      last_success_at=COALESCE($5,last_success_at) WHERE id='collector' AND owner=$3`,
+    [completedAt, completedAt === null ? null : Math.floor(completedAt / 60_000), owner, retryAt, successAt]);
+  }
+  async collectionState(): Promise<{ retryAt: number; lastAttemptAt: number; lastSuccessAt: number }> {
+    const row = (await this.db.query("SELECT retry_at,last_attempt_at,last_success_at FROM monitor_lease WHERE id='collector'")).rows[0];
+    return { retryAt: Number(row?.retry_at ?? 0), lastAttemptAt: Number(row?.last_attempt_at ?? 0), lastSuccessAt: Number(row?.last_success_at ?? 0) };
+  }
+  async deferCollection(retryAt: number) {
+    if (!Number.isSafeInteger(retryAt) || retryAt <= 0) return;
+    await this.db.query(`INSERT INTO monitor_lease(id,owner,expires_at,last_completed_slot,retry_at) VALUES('collector','',0,-1,$1)
+      ON CONFLICT(id) DO UPDATE SET retry_at=CASE WHEN monitor_lease.retry_at>$1 THEN monitor_lease.retry_at ELSE $1 END`, [retryAt]);
   }
   async acquirePushLease(owner: string, now = Date.now()): Promise<boolean> {
     const result = await this.db.query(`INSERT INTO monitor_lease(id,owner,expires_at,last_completed_slot) VALUES('push',$1,$2,-1)

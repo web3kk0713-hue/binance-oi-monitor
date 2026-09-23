@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createCollector } from '../data/collector';
 import { toHistoryPoint } from '../shared/history';
 import { analyzeShortline } from '../shared/shortline';
+import { retainLastGood } from '../shared/reliability';
 import { COLLECTION_INTERVAL_MS } from '../shared/types';
 import type { BackendStatus, CollectionProgress, HistoryPoint, Snapshot } from '../shared/types';
 import { loadLatest, readHistory, readRecentSamples, saveSnapshot, type Settings } from './storage';
@@ -17,6 +18,7 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
   const [progress, setProgress] = useState<CollectionProgress | null>(null);
   const [collecting, setCollecting] = useState(false);
   const [nextRun, setNextRun] = useState(Date.now());
+  const [retryAt, setRetryAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [backend, setBackend] = useState<BackendStatus | null>(null);
@@ -31,8 +33,11 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
     .map(([id, points]) => [id, analyzeShortline(points, id, clock)])), [recent, clock]);
   useEffect(() => {
     let stopped = false; let busy = false; let timer: ReturnType<typeof setTimeout> | undefined; let latest = 0;
+    let previous: Snapshot | null = null;
+    let sourceRetryAt = 0;
+    let readyCollector: Awaited<ReturnType<typeof createCollector>> | undefined;
     const controller = new AbortController();
-    setSnapshot(null); setProgress(null); setError(null); setBackend(null); setStorageError(null); setRecent({});
+    setSnapshot(null); setProgress(null); setError(null); setBackend(null); setStorageError(null); setRecent({}); setRetryAt(0);
     const remember = (points: HistoryPoint[]) => {
       if (stopped) return;
       const cutoff = Date.now() - 10 * 60_000;
@@ -55,8 +60,9 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
       if (!stopped) setStorageError('无法读取本机历史。浏览器存储可能被禁用。');
       return undefined;
     }) : Promise.resolve(undefined)).then((cached) => {
-      if (!stopped && latest === 0 && cached) setSnapshot(cached);
-      return createCollector({ mode: 'direct', concurrency: 12, initialSnapshot: cached });
+      if (!stopped && latest === 0 && cached) { previous = retainLastGood(cached); setSnapshot(previous); }
+      readyCollector = createCollector({ mode: 'direct', concurrency: 12, initialSnapshot: cached });
+      return readyCollector;
     });
     const run = async () => {
       if (stopped || busy) return; busy = true;
@@ -69,17 +75,24 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
             backendGet<Snapshot>(settings.backendUrl, '/api/v1/snapshot', controller.signal),
             backendGet<BackendStatus>(settings.backendUrl, '/api/v1/health', controller.signal),
           ]);
-          if (health.status === 'fulfilled' && !stopped) setBackend(health.value);
+          if (health.status === 'fulfilled' && !stopped) {
+            setBackend(health.value); sourceRetryAt = health.value.retryAt ?? 0;
+            if (health.value.lastError) setError(health.value.lastError);
+          } else if (!stopped) setBackend(null);
           if (result.status === 'rejected') throw result.reason;
           current = result.value;
           if (current.schemaVersion !== 1 || !Array.isArray(current.assets)) throw new Error('后台快照格式不兼容。');
         } else {
-          const readyCollector = await collector;
+          const client = await collector;
           if (stopped) return;
-          current = await readyCollector.collect({ signal: controller.signal, onProgress: (value) => { if (!stopped) setProgress(value); } });
+          sourceRetryAt = client.retryAt?.() ?? 0;
+          if (sourceRetryAt > Date.now()) { setError('数据源限流或配额保护中，将在冷却结束后自动重试。'); return; }
+          current = await client.collect({ signal: controller.signal, onProgress: (value) => { if (!stopped) setProgress(value); } });
+          sourceRetryAt = Math.max(current.retryAt ?? 0, client.retryAt?.() ?? 0);
         }
         if (stopped) return;
         if (current.asOf !== latest) {
+          current = retainLastGood(current, previous); previous = current;
           latest = current.asOf; setSnapshot(current); setClock(Date.now());
           remember(current.assets.map(asset => toHistoryPoint(asset, current)));
           callback.current(current);
@@ -94,7 +107,10 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
         busy = false;
         if (!stopped) {
           setCollecting(false);
-          const wait = settings.mode === 'server' ? 10_000 : Math.max(2_000, COLLECTION_INTERVAL_MS - (Date.now() - startedAt));
+          if (settings.mode === 'direct') sourceRetryAt = Math.max(sourceRetryAt, readyCollector?.retryAt?.() ?? 0);
+          setRetryAt(sourceRetryAt > Date.now() ? sourceRetryAt : 0);
+          // Backend polling is cheap and remains active during an upstream pause. Browser collection does not.
+          const wait = settings.mode === 'server' ? 10_000 : Math.max(2_000, COLLECTION_INTERVAL_MS - (Date.now() - startedAt), sourceRetryAt - Date.now() + 250);
           setNextRun(Date.now() + wait); timer = setTimeout(() => void run(), wait);
         }
       }
@@ -103,7 +119,7 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
     void run();
     return () => { stopped = true; controller.abort(); if (timer) clearTimeout(timer); refreshRef.current = () => undefined; };
   }, [settings.mode, settings.backendUrl]);
-  return { snapshot, progress, collecting, nextRun, error, storageError, backend, historyVersion, shortline, refresh };
+  return { snapshot, progress, collecting, nextRun, retryAt, error, storageError, backend, historyVersion, shortline, refresh };
 }
 
 export function useHistory(assetId: string | undefined, hours: number, settings: Settings, version: number) {

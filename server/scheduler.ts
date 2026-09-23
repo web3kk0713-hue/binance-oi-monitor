@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { evaluateAlerts } from '../src/shared/alerts';
+import { retainLastGood } from '../src/shared/reliability';
 import { COLLECTION_INTERVAL_MS, DEFAULT_THRESHOLDS, type BackendStatus, type Collector, type Snapshot } from '../src/shared/types';
 import type { ServerConfig } from './config';
 import type { PushSender } from './push';
@@ -17,18 +18,22 @@ export class MonitorScheduler {
   private lastSuccess: number | null = null;
   private lastError: string | null = null;
   private lastDurationMs: number | null = null;
+  private retryAt = 0;
   constructor(private store: MonitorStore, private collector: Collector, private push: PushSender,
     private config: ServerConfig, private now: () => number = Date.now, private onSnapshot?: (snapshot: Snapshot) => void) {}
 
   async initialize() {
     const latest = await this.store.latest();
-    this.lastSuccess = latest?.asOf ?? null;
+    const state = await this.store.collectionState();
+    this.retryAt = Math.max(state.retryAt, latest?.retryAt ?? 0);
+    this.lastSuccess = state.lastSuccessAt || (latest?.coverage.oi ? latest.asOf : null);
     this.lastDurationMs = latest?.durationMs ?? null;
   }
   status(): BackendStatus {
     return { mode: 'server', version: '0.1.0', collecting: this.active !== null, lastSuccess: this.lastSuccess,
       storage: this.store.kind, pushEnabled: this.push.enabled, retentionDays: 30, lastError: this.lastError,
-      collectionIntervalMs: COLLECTION_INTERVAL_MS, lastDurationMs: this.lastDurationMs, rawRetentionDays: 7 };
+      collectionIntervalMs: COLLECTION_INTERVAL_MS, lastDurationMs: this.lastDurationMs, rawRetentionDays: 7,
+      retryAt: this.retryAt > this.now() ? this.retryAt : 0 };
   }
   start() {
     if (this.collectionTimer) return;
@@ -50,10 +55,14 @@ export class MonitorScheduler {
   private async collect(): Promise<boolean> {
     let acquired = false;
     let completedAt: number | null = null;
+    let successAt: number | null = null;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let renewal: ReturnType<typeof setInterval> | undefined;
     const start = this.now();
     try {
+      const state = await this.store.collectionState();
+      this.retryAt = Math.max(this.retryAt, state.retryAt, this.collector.retryAt?.() ?? 0);
+      if (this.retryAt > start) { await this.store.deferCollection(this.retryAt); return false; }
       acquired = await this.store.acquireLease(this.owner, start);
       if (!acquired) return false;
       const abort = new AbortController();
@@ -62,12 +71,15 @@ export class MonitorScheduler {
       renewal = setInterval(() => {
         void this.store.renewLease(this.owner, this.now()).then(owned => { if (!owned) abort.abort(); }).catch(() => abort.abort());
       }, 30_000);
-      const snapshot = await this.collector.collect({ signal: abort.signal });
+      let snapshot = await this.collector.collect({ signal: abort.signal });
+      this.retryAt = Math.max(snapshot.retryAt ?? 0, this.collector.retryAt?.() ?? 0);
       if (abort.signal.aborted || this.stopped) throw new Error('Collection interrupted');
-      if (!snapshot.assets.length || snapshot.coverage.oi === 0 || !Number.isFinite(snapshot.asOf)) {
+      if (!snapshot.assets.length || !Number.isFinite(snapshot.asOf)
+        || snapshot.coverage.oi === 0 && snapshot.assets.some(asset => asset.oiUsd !== null)) {
         this.lastError = '本轮没有有效 OI 数据，保留上一轮快照';
         return false;
       }
+      snapshot = retainLastGood(snapshot, await this.store.latest());
       snapshot.mode = 'server';
       snapshot.collectionIntervalMs = COLLECTION_INTERVAL_MS;
       const global = evaluateAlerts(snapshot, DEFAULT_THRESHOLDS, await this.store.states(), this.now());
@@ -77,22 +89,23 @@ export class MonitorScheduler {
         evaluations.push({ id: subscription.id, thresholds: subscription.thresholds, ...result });
       }
       await this.store.commitCollection(snapshot, global.states, global.events, evaluations);
-      this.lastSuccess = snapshot.asOf;
-      this.lastError = snapshot.errors.length ? '部分源数据缺失，详见快照覆盖率' : null;
-      completedAt = Math.floor(start / COLLECTION_INTERVAL_MS) * COLLECTION_INTERVAL_MS;
+      const valid = snapshot.assets.some(asset => asset.complete && asset.oiUsd !== null);
+      if (valid) { this.lastSuccess = snapshot.asOf; successAt = snapshot.asOf; completedAt = Math.floor(start / COLLECTION_INTERVAL_MS) * COLLECTION_INTERVAL_MS; }
+      this.lastError = valid ? snapshot.errors.length ? '部分源数据缺失，详见快照覆盖率' : null : '本轮 OI 未完整取得，保留的上次值仅供参考';
       try { this.onSnapshot?.(snapshot); } catch { /* The independent flow feed retries from the persisted OI snapshot. */ }
       void this.flushPush();
-      return true;
+      return valid;
     } catch {
       if (!this.stopped) this.lastError = this.abort?.signal.aborted ? '采集超时或中断，等待下一轮重试' : '本轮采集或持久化失败，等待下一轮重试';
       return false;
     } finally {
+      this.retryAt = Math.max(this.retryAt, this.collector.retryAt?.() ?? 0);
       if (timeout) clearTimeout(timeout);
       if (renewal) clearInterval(renewal);
       this.abort = null;
       if (acquired) {
         this.lastDurationMs = Math.max(0, this.now() - start);
-        await this.store.releaseLease(this.owner, completedAt).catch(() => {});
+        await this.store.releaseLease(this.owner, completedAt, this.retryAt, successAt).catch(() => {});
       }
     }
   }

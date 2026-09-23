@@ -11,6 +11,8 @@ const PRICE_URL = `${BINANCE}/fapi/v1/premiumIndex`;
 const FX_URL = `${BINANCE}/fapi/v1/assetIndex`;
 const CG_MAPPING_URL = `${CG}/derivatives/exchanges/binance_futures?include_tickers=all`;
 const MINUTE = 60_000;
+const UNIVERSE_REFRESH = 15 * MINUTE;
+const MISSING_IDENTITY_REFRESH = 5 * MINUTE;
 const SUPPLY_REFRESH = 60 * MINUTE;
 const SUPPLY_MAX_AGE = 2 * SUPPLY_REFRESH;
 const MARKET_MAX_AGE = 90_000;
@@ -81,13 +83,18 @@ export function createCollector(options: CollectorOptions = {}): Collector {
   const requestedConcurrency = Number.isFinite(options.concurrency) ? Math.floor(options.concurrency!) : 12;
   const concurrency = Math.max(1, Math.min(12, requestedConcurrency));
   const request = createSourceClient(options.fetcher ?? fetch, concurrency);
+  request.deferUntil(options.initialSnapshot?.retryAt ?? 0);
   let universe: Cached<Contract[]> | undefined;
   let geckoMapping: Cached<GeckoTicker[]> | undefined;
   const supplies = new Map<string, Supply>();
   const identities = new Map<string, Identity>();
   let nextSupplyAttempt = 0;
+  let supplyUniverseKey = '';
   let supplyProblems: string[] = [];
   let inFlight: Promise<Snapshot> | undefined;
+  // Scheduling metadata only: failed/old values never enter a new raw snapshot.
+  const oiSchedule = new Map<string, { attemptedAt: number; successful: boolean; order: number }>();
+  let oiAttemptSequence = 0;
 
   // Rehydrate only still-fresh, previously verified evidence. Original provider times are never rewritten.
   for (const row of options.initialSnapshot?.assets ?? []) {
@@ -110,19 +117,22 @@ export function createCollector(options: CollectorOptions = {}): Collector {
   }
 
   async function loadSupply(contracts: Contract[], signal: AbortSignal, errors: string[]) {
+    const groups = new Map<string, Contract[]>();
+    for (const contract of contracts) groups.set(contract.baseAsset, [...groups.get(contract.baseAsset) ?? [], contract]);
+    const universeKey = [...groups.keys()].sort().join('|');
+    // A refreshed listing directory must not inherit another asset's hourly metadata delay.
+    if (universeKey !== supplyUniverseKey) { supplyUniverseKey = universeKey; nextSupplyAttempt = 0; }
     if (Date.now() < nextSupplyAttempt) { errors.push(...supplyProblems); return; }
     // A failed provider is retried at most once per minute; successful supply is retained with its real timestamps.
     nextSupplyAttempt = Date.now() + MINUTE;
     const problems: string[] = [];
-    const groups = new Map<string, Contract[]>();
-    for (const contract of contracts) groups.set(contract.baseAsset, [...groups.get(contract.baseAsset) ?? [], contract]);
     for (const base of groups.keys()) {
       const override = IDENTITY_OVERRIDES[base];
       if (!override) continue;
       identities.set(base, { symbol: override.symbol, geckoId: override.geckoId, cmcId: override.cmcId, multiplier: 1, url: override.sources[0]!, mapping: `${override.address ? '官方合约地址核验' : '官方原生币身份核验'} ${override.chain}:${override.address ?? '原生资产'}; CoinGecko=${override.geckoId}; CMC=${override.cmcId}; ${override.sources.join(' ; ')}` });
     }
     const cachedForAll = [...groups.keys()].map(base => selectSupply(identities.get(base)));
-    if (cachedForAll.every(supply => supply && Date.now() - supply.evidence.fetchedAt < SUPPLY_REFRESH)) {
+    if (supplyProblems.length === 0 && cachedForAll.every(supply => supply && Date.now() - supply.evidence.fetchedAt < SUPPLY_REFRESH)) {
       nextSupplyAttempt = Math.min(...cachedForAll.map(supply => supply!.evidence.fetchedAt + SUPPLY_REFRESH));
       supplyProblems = [];
       return;
@@ -132,24 +142,28 @@ export function createCollector(options: CollectorOptions = {}): Collector {
 
     try {
       if ([...groups.keys()].some(base => !IDENTITY_OVERRIDES[base])) {
-      if (!geckoMapping || Date.now() - geckoMapping.fetchedAt >= 24 * SUPPLY_REFRESH) {
-        const result = await request<{ tickers: GeckoTicker[] }>(CG_MAPPING_URL, signal);
-        if (!Array.isArray(result.tickers)) throw new Error('COINGECKO_MAPPING_INVALID');
-        geckoMapping = { value: result.tickers, fetchedAt: Date.now() };
-      }
-      for (const [base, group] of groups) {
-        if (IDENTITY_OVERRIDES[base]) continue;
-        const ticks = geckoMapping.value.filter(t => t.contract_type === 'perpetual' && t.base === base && group.some(c => c.symbol === t.symbol && c.quoteAsset === t.target) && t.coin_id);
-        const ids = new Set(ticks.map(t => t.coin_id!));
-        if (ids.size !== 1) continue;
-        const providerId = [...ids][0]!;
-        if (!/^[a-zA-Z0-9_-]+$/.test(providerId)) continue;
-        const alias = UNIT_ALIASES[base];
-        if (alias && !alias.acceptedGeckoIds.includes(providerId)) continue;
-        identities.set(base, { symbol: alias?.symbol ?? base, geckoId: alias?.geckoId ?? providerId, multiplier: alias?.multiplier ?? 1, url: CG_MAPPING_URL, mapping: `CoinGecko Binance 合约 ${ticks.map(t => t.symbol).join(',')} → ${providerId}${alias ? ` → ${alias.geckoId}; 单位倍率 ${alias.multiplier}; ${alias.evidence}` : ''}` });
-      }
+        const hasUnmapped = [...groups.keys()].some(base => !identities.has(base));
+        const mappingMaxAge = hasUnmapped ? MISSING_IDENTITY_REFRESH : 24 * SUPPLY_REFRESH;
+        if (!geckoMapping || Date.now() - geckoMapping.fetchedAt >= mappingMaxAge) {
+          const result = await request<{ tickers: GeckoTicker[] }>(CG_MAPPING_URL, signal);
+          if (!Array.isArray(result.tickers)) throw new Error('COINGECKO_MAPPING_INVALID');
+          geckoMapping = { value: result.tickers, fetchedAt: Date.now() };
+        }
+        for (const [base, group] of groups) {
+          if (IDENTITY_OVERRIDES[base]) continue;
+          const ticks = geckoMapping.value.filter(t => t.contract_type === 'perpetual' && t.base === base && group.some(c => c.symbol === t.symbol && c.quoteAsset === t.target) && t.coin_id);
+          const ids = new Set(ticks.map(t => t.coin_id!));
+          if (ids.size !== 1) continue;
+          const providerId = [...ids][0]!;
+          if (!/^[a-zA-Z0-9_-]+$/.test(providerId)) continue;
+          const alias = UNIT_ALIASES[base];
+          if (alias && !alias.acceptedGeckoIds.includes(providerId)) continue;
+          identities.set(base, { symbol: alias?.symbol ?? base, geckoId: alias?.geckoId ?? providerId, multiplier: alias?.multiplier ?? 1, url: CG_MAPPING_URL, mapping: `CoinGecko Binance 合约 ${ticks.map(t => t.symbol).join(',')} → ${providerId}${alias ? ` → ${alias.geckoId}; 单位倍率 ${alias.multiplier}; ${alias.evidence}` : ''}` });
+        }
       }
     } catch (error) { problems.push(`COINGECKO_IDENTITY: ${message(error)}`); }
+    const unresolved = [...groups.keys()].filter(base => !identities.has(base));
+    if (unresolved.length) problems.push(`COINGECKO_IDENTITY_PARTIAL: ${unresolved.length}/${groups.size} 个资产缺少可核实映射，最多每 5 分钟重验；不按同名猜测`);
 
     // Provider slugs and symbols are not global identities. Only reviewed native-token or
     // contract-address mappings may authorize a CMC ID; all other supply stays within CoinGecko.
@@ -167,6 +181,9 @@ export function createCollector(options: CollectorOptions = {}): Collector {
           if (!ids.includes(row.id)) continue;
           supplies.set(`cmc:${row.id}`, { symbol: row.symbol.toUpperCase(), name: row.name, evidence: { provider: 'CoinMarketCap', id: String(row.id), circulating: supplyNumber(row.circulating_supply), total: supplyNumber(row.total_supply), max: row.infinite_supply ? null : supplyNumber(row.max_supply), providerPriceUsd: cmcUsdPrice(row.quote), updatedAt: iso(row.last_updated), fetchedAt: Date.now(), url } });
         }
+        const returned = new Set(rows.map(row => row.id));
+        const absent = ids.filter(id => !returned.has(id));
+        if (absent.length) problems.push(`CMC_SUPPLY_PARTIAL: ${absent.length}/${ids.length} 个请求的资产未返回供应量，下轮仅补取缺失项`);
       }
     } catch (error) { problems.push(`CMC_SUPPLY: ${message(error)}`); }
 
@@ -191,7 +208,15 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         if (absent.length) problems.push(`COINGECKO_SUPPLY_PARTIAL: ${absent.length}/${ids.length} 个请求的资产未返回供应量，下轮仅补取缺失项`);
       } catch (error) { problems.push(`COINGECKO_SUPPLY: ${message(error)}`); break; }
     }
-    if (problems.length === 0) nextSupplyAttempt = Date.now() + SUPPLY_REFRESH;
+    // Each successful asset retains its own refresh deadline after a partial batch recovers.
+    const nextCachedRefresh = Math.min(Date.now() + SUPPLY_REFRESH, ...[...groups.keys()].flatMap(base => {
+      const supply = selectSupply(identities.get(base));
+      return supply ? [supply.evidence.fetchedAt + SUPPLY_REFRESH] : [];
+    }));
+    if (problems.length === 0) nextSupplyAttempt = Math.max(Date.now() + MINUTE, nextCachedRefresh);
+    else if (problems.every(problem => problem.startsWith('COINGECKO_IDENTITY_PARTIAL:'))) {
+      nextSupplyAttempt = Math.max(Date.now() + MINUTE, Math.min(nextCachedRefresh, (geckoMapping?.fetchedAt ?? Date.now()) + MISSING_IDENTITY_REFRESH));
+    }
     supplyProblems = dedupe(problems);
     errors.push(...supplyProblems);
   }
@@ -223,7 +248,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       roundOptions?.onProgress?.({ stage: '读取 Binance 合约与价格', done: 0, total: 0, failed: 0 });
       await Promise.all([
         (async () => {
-          if (universe && Date.now() - universe.fetchedAt < 15 * MINUTE) return;
+          if (universe && Date.now() - universe.fetchedAt < UNIVERSE_REFRESH) return;
           try {
             const result = await request<{ symbols: Contract[]; rateLimits?: Array<{ rateLimitType: string; interval: string; intervalNum: number; limit: number }> }>(EXCHANGE_URL, signal);
             if (!Array.isArray(result.symbols)) throw new Error('BINANCE_UNIVERSE_INVALID');
@@ -239,16 +264,31 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       ]);
       if (!universe) throw new Error(`无法取得 Binance 合约清单。${errors.join('；')}`);
       const contracts = universe.value;
+      const listed = new Set(contracts.map(contract => contract.symbol));
+      for (const symbol of oiSchedule.keys()) if (!listed.has(symbol)) oiSchedule.delete(symbol);
+      const queue = [...contracts].sort((left, right) => {
+        const a = oiSchedule.get(left.symbol);
+        const b = oiSchedule.get(right.symbol);
+        if (!a || !b) return a ? 1 : b ? -1 : 0;
+        // Missing OI gets one interval of priority, not permanent precedence: old healthy
+        // contracts will overtake repeated failures, while unattempted tails always go first.
+        const aDue = a.attemptedAt + (a.successful ? COLLECTION_INTERVAL_MS : 0);
+        const bDue = b.attemptedAt + (b.successful ? COLLECTION_INTERVAL_MS : 0);
+        return aDue - bDue || a.order - b.order;
+      });
       let cursor = 0;
       let done = 0;
       let failed = 0;
       const workers = Array.from({ length: Math.min(concurrency, contracts.length) }, async () => {
         while (cursor < contracts.length && !signal.aborted) {
-          const contract = contracts[cursor++]!;
+          const contract = queue[cursor++]!;
+          const schedule = { attemptedAt: Date.now(), successful: false, order: ++oiAttemptSequence };
+          oiSchedule.set(contract.symbol, schedule);
           const url = `${BINANCE}/fapi/v1/openInterest?symbol=${encodeURIComponent(contract.symbol)}`;
           try {
             const result = await request<Oi>(url, signal);
             if (result.symbol !== contract.symbol || !decimal(result.openInterest, true) || !epoch(result.time)) throw new Error('BINANCE_OI_INVALID');
+            schedule.successful = fresh(result.time, Date.now(), MARKET_MAX_AGE);
             observations.set(contract.symbol, { data: result, observedAt: Date.now() });
           } catch (error) { failed++; observations.set(contract.symbol, { observedAt: Date.now(), error: message(error) }); }
           done++;
@@ -269,7 +309,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       const assets: AssetRow[] = [];
       for (const [base, group] of grouped) {
         const issues: string[] = [];
-        if (asOf - universe.fetchedAt >= 15 * MINUTE) issues.push('合约清单过期，暂停告警');
+        if (asOf - universe.fetchedAt >= UNIVERSE_REFRESH) issues.push('合约清单过期，暂停告警');
         const identity = identities.get(group[0]!.baseAsset);
         const supply = selectSupply(identity);
         const identityCandidate = !!identity && !!supply && supply.symbol === identity.symbol.toUpperCase();
@@ -318,7 +358,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         const cap = tokenPrice && circulation !== null ? tokenPrice.mul(circulation) : null;
         const fdv = tokenPrice && max !== null ? tokenPrice.mul(max) : null;
         // OI-history completeness is independent of supply availability. FDV needs max, not circulating supply.
-        const complete = asOf - universe.fetchedAt < 15 * MINUTE && evidence.every(c => !c.error) && oiSum !== null && tokenPrice !== null;
+        const complete = asOf - universe.fetchedAt < UNIVERSE_REFRESH && evidence.every(c => !c.error) && oiSum !== null && tokenPrice !== null;
         const alertEligible = complete && mappingVerified && !!supply && supplyFresh(supply) && !!fdv?.gt(0);
         const oldestOi = evidence.every(c => c.oiTime !== null) ? Math.min(...evidence.map(c => c.oiTime!)) : null;
         assets.push({ id: `binance:${base}`, symbol: base, name: mappingVerified ? supply!.name : base, contracts: group.map(c => c.symbol), priceUsd: finite(tokenPrice), oiUsd: finite(oiSum), oiQuantity: finite(oiQuantity), marketCapUsd: finite(cap), fdvUsd: finite(fdv), oiToFdv: oiSum && fdv?.gt(0) ? finite(oiSum.div(fdv).mul(100)) : null, oiToMarketCap: oiSum && cap?.gt(0) ? finite(oiSum.div(cap).mul(100)) : null, circulatingSupply: circulation, maxSupply: max, updatedAt: asOf, oiUpdatedAt: oldestOi, priceUpdatedAt: reference?.priceTime ?? null, supplyUpdatedAt: supply?.evidence.updatedAt || null, complete, alertEligible, issues: dedupe(issues), supplySource: supply?.evidence.provider ?? null, mappingStatus: mappingVerified ? 'verified' : 'unmapped', evidence: { contracts: evidence, supply: supply ? { ...supply.evidence, mappingUrl: identity?.url } : null, mapping: identity?.mapping ?? '未找到与 Binance 合约相符的可靠资产标识；不按重名或市值猜测。' } });
@@ -326,11 +366,11 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       assets.sort((a, b) => (b.oiUsd ?? -1) - (a.oiUsd ?? -1));
       const failedContracts = assets.reduce((sum, a) => sum + a.evidence.contracts.filter(c => c.error).length, 0);
       if (failedContracts) errors.push(`BINANCE_PARTIAL: ${failedContracts}/${contracts.length} 个合约存在缺失或过期数据`);
-      return { schemaVersion: 1, mode, startedAt, asOf, durationMs: asOf - startedAt, collectionIntervalMs: COLLECTION_INTERVAL_MS, universe: { contracts: contracts.length, assets: assets.length }, coverage: { oi: assets.filter(a => a.oiUsd !== null).length, marketCap: assets.filter(a => a.marketCapUsd !== null).length, fdv: assets.filter(a => a.fdvUsd !== null).length, eligible: assets.filter(a => a.alertEligible).length, failedContracts }, assets, errors: dedupe(errors) };
+      return { schemaVersion: 1, mode, startedAt, asOf, durationMs: asOf - startedAt, collectionIntervalMs: COLLECTION_INTERVAL_MS, retryAt: request.retryAt() || undefined, universe: { contracts: contracts.length, assets: assets.length }, coverage: { oi: assets.filter(a => a.oiUsd !== null).length, marketCap: assets.filter(a => a.marketCapUsd !== null).length, fdv: assets.filter(a => a.fdvUsd !== null).length, eligible: assets.filter(a => a.alertEligible).length, failedContracts }, assets, errors: dedupe(errors) };
     } finally {
       clearTimeout(timer);
       roundOptions?.signal?.removeEventListener('abort', externalAbort);
     }
   }
-  return { collect(roundOptions) { if (!inFlight) inFlight = run(roundOptions).finally(() => { inFlight = undefined; }); return inFlight; } };
+  return { retryAt: () => request.retryAt(), collect(roundOptions) { if (!inFlight) inFlight = run(roundOptions).finally(() => { inFlight = undefined; }); return inFlight; } };
 }

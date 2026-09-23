@@ -15,7 +15,7 @@ interface Connection { socket: WebSocket | null; stop: () => void; restart: () =
 /** Shared browser/server ingestion; no credentials, trades, or private account APIs. */
 export function createFlowFeed(options: FlowFeedOptions) {
   const now = options.now ?? Date.now, fetcher = options.fetcher ?? fetch;
-  const request = createSourceClient(fetcher, 3), engine = createFlowEngine();
+  const request = createSourceClient(fetcher, 3, { priority: 'background' }), engine = createFlowEngine();
   const controller = new AbortController(), startedAt = now();
   const markets = new Map<string, FlowMarket>(), connections = new Set<Connection>();
   const futuresConnections = new Set<Connection>();

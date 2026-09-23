@@ -42,6 +42,10 @@ export interface Snapshot {
   coverage: { oi: number; marketCap: number; fdv: number; eligible: number; failedContracts: number };
   assets: AssetRow[]; errors: string[];
   collectionIntervalMs?: number;
+  /** Display-only last complete observations. Never consumed as current samples or alerts. */
+  lastGood?: Record<string, HistoryPoint>;
+  /** Absolute upstream/local-budget retry deadline, not a new observation time. */
+  retryAt?: number;
 }
 export interface CollectionProgress { stage: string; done: number; total: number; failed: number; }
 export interface HistoryPoint {
@@ -75,9 +79,11 @@ export interface CollectorOptions {
 }
 export interface Collector {
   collect(options?: { signal?: AbortSignal; onProgress?: (progress: CollectionProgress) => void }): Promise<Snapshot>;
+  retryAt?(): number;
 }
 export interface BackendStatus {
   mode: 'server'; version: string; collecting: boolean; lastSuccess: number | null;
   storage: string; pushEnabled: boolean; retentionDays: number; lastError: string | null;
   collectionIntervalMs?: number; lastDurationMs?: number | null; rawRetentionDays?: number;
+  retryAt?: number;
 }
