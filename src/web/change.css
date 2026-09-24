@@ -32,7 +32,7 @@
 .change-tabs span { margin-left: 6px; font-variant-numeric: tabular-nums; }
 .change-search input { width: 190px; background: #fbfcfd; }
 .change-table-scroll { overflow-x: auto; }
-.change-results table { width: 100%; border-collapse: collapse; min-width: 880px; font-size: 13px; }
+.change-results table { width: 100%; border-collapse: collapse; min-width: 1320px; font-size: 13px; }
 .change-results th { padding: 10px 16px; text-align: right; background: #fcfcfd; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .change-results th:first-child, .change-results td:first-child, .change-results th:last-child, .change-results td:last-child { text-align: left; }
 .change-results td { padding: 11px 16px; text-align: right; border-top: 1px solid #f0f1f4; font-variant-numeric: tabular-nums; vertical-align: top; }
@@ -86,6 +86,7 @@
   .change-apply .primary { flex: 1; }
   .change-results-head { flex-wrap: wrap; padding: 12px; }
   .change-search, .change-search input { width: 100%; }
+  .change-pattern-filter, .change-pattern-filter select { width: 100%; }
   .change-tabs { width: 100%; justify-content: space-between; gap: 2px; }
   .change-tabs button { padding: 6px; }
   .change-pagination { align-items: start; flex-direction: column; }

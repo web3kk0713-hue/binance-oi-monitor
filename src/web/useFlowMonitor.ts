@@ -6,6 +6,8 @@ import type { Settings } from './storage';
 import { backendGet } from './useMonitor';
 import { loadFlowEvents, loadFlowHistory, mergeFlowHistory, saveFlowUpdate } from './flowStorage';
 
+export type FlowMonitor = ReturnType<typeof useFlowMonitor>;
+
 export function useFlowMonitor(settings: Settings, snapshot: Snapshot | null) {
   const [data, setData] = useState<FlowSnapshot | null>(null), [error, setError] = useState<string | null>(null);
   const feed = useRef<ReturnType<typeof createFlowFeed> | null>(null), source = useRef(snapshot);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { analyzeChange, type ChangeRule } from '../shared/changeMonitor';
+import { analyzePosition } from '../shared/positionContext';
 import { toHistoryPoint } from '../shared/history';
 import type { HistoryPoint, Snapshot } from '../shared/types';
 import { readChangeBaselines, type Settings } from './storage';
@@ -31,7 +32,11 @@ export function useChangeMonitor(snapshot: Snapshot | null, settings: Settings, 
   const rows = useMemo(() => {
     const baselines = new Map(points.map(point => [point.assetId, point]));
     const evaluatedAt = Date.now();
-    return snapshot?.assets.map(asset => analyzeChange(asset, toHistoryPoint(asset, snapshot), baselines.get(asset.id) ?? null, rule, evaluatedAt)) ?? [];
+    return snapshot?.assets.map(asset => {
+      const latest = toHistoryPoint(asset, snapshot), baseline = baselines.get(asset.id) ?? null;
+      return { ...analyzeChange(asset, latest, baseline, rule, evaluatedAt),
+        position: analyzePosition(asset, latest, baseline, rule.windowMinutes, evaluatedAt) };
+    }) ?? [];
   }, [snapshot, points, rule, now]);
   return { rows, now, loading: at !== null && loaded.key !== key, error: loaded.key === key ? loaded.error : null, refresh: () => setRetry(value => value + 1) };
 }

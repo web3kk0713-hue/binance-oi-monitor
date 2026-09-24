@@ -80,8 +80,53 @@ function sourceIssue(point: HistoryPoint, key: 'oiSourceTime' | 'priceSourceTime
   return null;
 }
 
-interface MetricChange { pct: number | null; matched: boolean | null; issue: string | null; }
-function compareMetric(current: number | null | undefined, initial: number | null | undefined,
+/** Shared guards keep monitoring summaries and configurable rules on the same endpoints. */
+export function latestEndpointIssue(assetId: string, latest: HistoryPoint, now: number): string | null {
+  if (!validTime(now)) return '当前时间无效';
+  if (latest.assetId !== assetId) return '端点不属于同一标的';
+  const issue = observationIssue(latest, now);
+  if (issue) return `最新端点${issue}`;
+  return now - latest.timestamp > MAX_SOURCE_AGE_MS ? '最新观测超过 90 秒' : null;
+}
+
+export function changeWindowIssue(assetId: string, latest: HistoryPoint, baseline: HistoryPoint | null,
+  windowMinutes: number, now: number): string | null {
+  if (!Number.isInteger(windowMinutes) || windowMinutes < 1 || windowMinutes > 10_080) return '监控参数无效';
+  if (!validTime(now)) return '当前时间无效';
+  if (latest.assetId !== assetId || (baseline !== null && baseline.assetId !== assetId)) return '端点不属于同一标的';
+  const latestIssue = latestEndpointIssue(assetId, latest, now);
+  if (latestIssue) return latestIssue;
+  if (!baseline) return '窗口起点附近尚无已知可用观测';
+  const target = latest.timestamp - windowMinutes * 60_000;
+  const baselineIssue = observationIssue(baseline, target);
+  if (baselineIssue) return `起点${baselineIssue}`;
+  return target - baseline.timestamp > BASELINE_TOLERANCE_MS ? '窗口起点偏差超过 45 秒，不插值比较' : null;
+}
+
+/** Call only after validating observation times; this also supports a current-only point with identical endpoints. */
+export function oiChangeIssue(latest: HistoryPoint, baseline: HistoryPoint, now: number,
+  basis: 'quantity' | 'usd'): string | null {
+  if (!latest.complete || !baseline.complete) return '合约数据不完整';
+  if (!latest.contractSetKey?.trim() || !baseline.contractSetKey?.trim()
+    || latest.contractSetKey !== baseline.contractSetKey) return '端点合约组成或单位倍率不一致';
+  if (!finiteNonnegative(latest.sourceSkewMs) || latest.sourceSkewMs > MAX_SOURCE_SKEW_MS
+    || !finiteNonnegative(baseline.sourceSkewMs) || baseline.sourceSkewMs > MAX_SOURCE_SKEW_MS)
+    return '源时间偏差未知或超过 30 秒';
+  const oldOi = sourceIssue(baseline, 'oiSourceTime', baseline.availableAt!);
+  const newOi = sourceIssue(latest, 'oiSourceTime', now);
+  const issue = oldOi ? `起点${oldOi}` : newOi ? `最新${newOi}` : null;
+  return issue ?? (basis === 'usd' ? priceChangeIssue(latest, baseline, now) : null);
+}
+
+/** Price is independently usable when supply/FDV is unavailable. */
+export function priceChangeIssue(latest: HistoryPoint, baseline: HistoryPoint, now: number): string | null {
+  const oldPrice = sourceIssue(baseline, 'priceSourceTime', baseline.availableAt!);
+  const newPrice = sourceIssue(latest, 'priceSourceTime', now);
+  return oldPrice ? `起点价格${oldPrice}` : newPrice ? `最新价格${newPrice}` : null;
+}
+
+export interface MetricChange { pct: number | null; matched: boolean | null; issue: string | null; }
+export function compareMetric(current: number | null | undefined, initial: number | null | undefined,
   condition: ChangeCondition, issue: string | null): MetricChange {
   if (issue) return { pct: null, matched: null, issue };
   if (!finiteNonnegative(current) || !finiteNonnegative(initial))
@@ -106,36 +151,11 @@ export function analyzeChange(asset: AssetRow, latest: HistoryPoint, baseline: H
     reason: '', startAt: baseline?.timestamp ?? null, endAt: latest.timestamp, baseline, latest };
   const unavailable = (reason: string): ChangeResult => ({ ...result, reason: `${reason}；仅比较区间端点，不保证区间连续` });
   if (!isChangeRule(rule)) return unavailable('监控参数无效');
-  if (!validTime(now)) return unavailable('当前时间无效');
-  if (latest.assetId !== asset.id || (baseline !== null && baseline.assetId !== asset.id)) return unavailable('端点不属于同一标的');
-  const latestIssue = observationIssue(latest, now);
-  if (latestIssue) return unavailable(`最新端点${latestIssue}`);
-  if (now - latest.timestamp > MAX_SOURCE_AGE_MS) return unavailable('最新观测超过 90 秒');
-  if (!baseline) return unavailable('窗口起点附近尚无已知可用观测');
-  const target = latest.timestamp - rule.windowMinutes * 60_000;
-  const baselineIssue = observationIssue(baseline, target);
-  if (baselineIssue) return unavailable(`起点${baselineIssue}`);
-  if (target - baseline.timestamp > BASELINE_TOLERANCE_MS) return unavailable('窗口起点偏差超过 45 秒，不插值比较');
+  const windowIssue = changeWindowIssue(asset.id, latest, baseline, rule.windowMinutes, now);
+  if (windowIssue || !baseline) return unavailable(windowIssue ?? '窗口起点附近尚无已知可用观测');
 
-  let oiIssue: string | null = null;
-  if (!latest.complete || !baseline.complete) oiIssue = '合约数据不完整';
-  else if (!latest.contractSetKey?.trim() || !baseline.contractSetKey?.trim()
-    || latest.contractSetKey !== baseline.contractSetKey) oiIssue = '端点合约组成或单位倍率不一致';
-  else if (!finiteNonnegative(latest.sourceSkewMs) || latest.sourceSkewMs > MAX_SOURCE_SKEW_MS
-    || !finiteNonnegative(baseline.sourceSkewMs) || baseline.sourceSkewMs > MAX_SOURCE_SKEW_MS) oiIssue = '源时间偏差未知或超过 30 秒';
-  else {
-    const oldOi = sourceIssue(baseline, 'oiSourceTime', baseline.availableAt!);
-    const newOi = sourceIssue(latest, 'oiSourceTime', now);
-    oiIssue = oldOi ? `起点${oldOi}` : newOi ? `最新${newOi}` : null;
-    if (!oiIssue && rule.oiBasis === 'usd') {
-      const oldPrice = sourceIssue(baseline, 'priceSourceTime', baseline.availableAt!);
-      const newPrice = sourceIssue(latest, 'priceSourceTime', now);
-      oiIssue = oldPrice ? `起点价格${oldPrice}` : newPrice ? `最新价格${newPrice}` : null;
-    }
-  }
-  const oldFdvSource = sourceIssue(baseline, 'priceSourceTime', baseline.availableAt!);
-  const newFdvSource = sourceIssue(latest, 'priceSourceTime', now);
-  const fdvIssue = oldFdvSource ? `起点价格${oldFdvSource}` : newFdvSource ? `最新价格${newFdvSource}` : null;
+  const oiIssue = oiChangeIssue(latest, baseline, now, rule.oiBasis);
+  const fdvIssue = priceChangeIssue(latest, baseline, now);
   const oiKey = rule.oiBasis === 'quantity' ? 'oiQuantity' : 'oiUsd';
   const oi = compareMetric(latest[oiKey], baseline[oiKey], rule.oi, oiIssue);
   // fdvUsd is frozen only after source/supply validation. Never rebuild it from today's supply.

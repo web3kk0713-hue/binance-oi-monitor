@@ -3,7 +3,11 @@ import type { FlowEvent, FlowEventKind, FlowHistory, FlowMetrics } from '../shar
 import type { Snapshot } from '../shared/types';
 import type { Settings } from './storage';
 import { FLOW_RULES } from '../shared/orderflow';
-import { useFlowMonitor } from './useFlowMonitor';
+import { useSharedFlowMonitor } from './FlowMonitorContext';
+import { useChangeMonitor } from './useChangeMonitor';
+import { DEFAULT_CHANGE_RULE } from '../shared/changeMonitor';
+import { selectFlowContext } from '../shared/flowContext';
+import { PositionHighlights, PositionPanel } from './PositionPanel';
 import { Icon } from './Icons';
 import { age, clockTime, dateTime, percent, signed } from './format';
 import { notificationSupport, registerNotifications } from './notifications';
@@ -43,8 +47,10 @@ function EventEvidence({ event, now, onExport }: { event: FlowEvent; now: number
   </section>;
 }
 
-export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { settings: Settings; snapshot: Snapshot | null; onOpenSettings: () => void }) {
-  const monitor = useFlowMonitor(settings, snapshot);
+export default function FlowDashboard({ settings, snapshot, active, historyVersion, onOpenSettings }: { settings: Settings; snapshot: Snapshot | null; active: boolean; historyVersion: number; onOpenSettings: () => void }) {
+  const monitor = useSharedFlowMonitor();
+  const changes = useChangeMonitor(active ? snapshot : null, settings, DEFAULT_CHANGE_RULE, historyVersion);
+  const positions = useMemo(() => changes.rows.map(row => row.position), [changes.rows]);
   const [now, setNow] = useState(Date.now);
   const [selectedKey, setSelectedKey] = useState<string | null>(() => new URLSearchParams(location.search).get('market'));
   const [selectedEvent, setSelectedEvent] = useState<FlowEvent | null>(null);
@@ -72,6 +78,8 @@ export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { 
   const events = monitor.data?.events ?? EMPTY_EVENTS;
   const chosen = selectedKey ? rows.find(row => row.market.key === selectedKey) : rows.find(row => row.market.venue === 'futures' && row.market.baseAsset === 'BTC') ?? rows[0];
   const marketKey = selectedKey ?? chosen?.market.key ?? null;
+  const positionRow = changes.rows.find(row => row.assetId === chosen?.market.assetId);
+  const position = positionRow?.position;
   const data = historyRecord?.key === marketKey ? historyRecord.data : null;
   const event = useMemo(() => {
     if (!selectedEvent || selectedEvent.marketKey !== marketKey) return null;
@@ -99,7 +107,7 @@ export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { 
   const chooseMarket = (key: string) => { setSelectedKey(key); setSelectedEvent(null); setPendingEventId(null); if (range === 'event') setRange('1h'); setMobilePane('chart'); };
 
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(timer); }, []);
-  useEffect(() => { monitor.selectMarket(marketKey ?? null); }, [marketKey, monitor.selectMarket]);
+  useEffect(() => { if (active) monitor.selectMarket(marketKey ?? null); }, [marketKey, monitor.selectMarket, active]);
   useEffect(() => { initialized.current = false; seen.current.clear(); mountedAt.current = Date.now(); setNotice(null); }, [settings.mode, settings.backendUrl]);
   useEffect(() => {
     if (!monitor.data) return;
@@ -137,6 +145,7 @@ export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { 
     navigator.serviceWorker.addEventListener('message', listener); return () => navigator.serviceWorker.removeEventListener('message', listener);
   }, []);
   useEffect(() => {
+    if (!active) return;
     if (!marketKey) { setHistoryRecord(null); return; }
     let stopped = false;
     const to = event ? Math.min(Date.now(), event.timestamp + 15 * 60_000) : undefined;
@@ -149,20 +158,26 @@ export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { 
     }).catch((reason: unknown) => { if (!stopped) setHistoryError(reason instanceof Error ? reason.message : '历史读取失败'); })
       .finally(() => { if (!stopped) setHistoryLoading(false); });
     return () => { stopped = true; };
-  }, [marketKey, range, event?.id, event?.timestamp, requestClock, requestVersion, settings.mode, settings.backendUrl]);
+  }, [active, marketKey, range, event?.id, event?.timestamp, requestClock, requestVersion, settings.mode, settings.backendUrl]);
 
   const exportEvidence = () => {
     if (!event && !data) return;
     const payload = { schemaVersion: 1, exportedAt: new Date().toISOString(), market: chosen?.market ?? data?.market, event,
       range: { from: chartFrom, to: Math.min(chartTo, now), intervalMinutes: interval },
       definitions: { currency: 'native quote currency; not USD', delta: '2 * takerBuyQuote - quoteVolume', cvd: 'sum of candle delta in each continuous displayed segment; resets after gaps', oi: 'last actually observed raw quantity in each displayed candle interval', bubbles: 'recorded large-trade events only; not a complete trade tape' },
-      history: data, currentMetrics: chosen ?? null };
+      history: data, currentMetrics: chosen ?? null,
+      currentPositionContext: positionRow ? { description: 'Current aggregate snapshot context, not evidence known at the historical event time',
+        metrics: position, baseline: positionRow.baseline, latest: positionRow.latest } : null };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `flow-${(chosen?.market.symbol ?? 'evidence').replace(/[^A-Z0-9_-]/gi, '')}-${event?.timestamp ?? Date.now()}.json`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const depth = chosen?.depth && chosen.depth.complete && now - chosen.depth.receivedAt <= 15_000 ? chosen.depth : null;
   const status = monitor.data?.status;
   const feedOld = status ? now - status.asOf > 30_000 : false;
+  const renderNow = Date.now();
+  const selectedContext = selectFlowContext(monitor.data, chosen?.market.assetId, renderNow, marketKey);
+  const tradeContext = chosen?.market.venue === 'spot' ? selectedContext.spot : selectedContext.futures;
+  const tradeReady = tradeContext?.priceChange5m != null;
 
   return <main className="flow-workspace" id="flow-monitor">
     <div className="flow-statusbar"><span className={`flow-connection ${monitor.error || feedOld ? 'is-stale' : status?.readyMarkets ? 'is-live' : ''}`}><i/>{settings.mode === 'direct' ? '浏览器实时采集' : '后台持续监控'}</span><span>{status ? `${status.readyMarkets} / ${status.markets} 个市场就绪 · ${status.warmingMarkets} 个预热中` : '正在建立市场连接'}</span><span className="flow-mode-limit">{settings.mode === 'direct' ? '关页或休眠会中断；本机保留 7 天' : status ? `保留 ${status.retentionDays} 天 · ${status.connectedStreams}/${status.totalStreams} 路连接` : '后台状态尚未核实'}</span><button onClick={onOpenSettings}>{settings.mode === 'direct' ? '连接后台' : '连接设置'}<Icon name="chevron" size={12}/></button></div>
@@ -170,6 +185,11 @@ export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { 
     {notice ? <div className={`flow-priority-notice ${direction(notice.event.kind)}`} role="alert"><Icon name="warning" size={21}/><div><strong>{notice.event.symbol} · {notice.event.title}</strong><p>{notice.count > 1 ? `本轮另有 ${notice.count - 1} 项异常 · ` : ''}{clockTime(notice.event.timestamp)} · 实验性事件，非买卖指令</p></div><button className="button secondary" onClick={() => { chooseEvent(notice.event); setNotice(null); }}>查看证据</button><button className="icon-button" aria-label="关闭事件提示" onClick={() => setNotice(null)}><Icon name="close" size={17}/></button></div> : null}
     {notificationError ? <div className="flow-inline-warning">{notificationError}<button onClick={() => setNotificationError(null)} aria-label="关闭通知提示"><Icon name="close" size={13}/></button></div> : null}
     <div className="flow-page-heading"><div><h1>异常监控<span>实验性规则</span></h1><p>发现异动，回到成交与持仓证据。</p></div><div className="flow-rule-summary"><span>大额成交</span><span>持续压力</span><span>放量突破</span><span>价量背离</span><span>盘口变薄</span></div></div>
+    <PositionHighlights rows={positions} windowMinutes={5} loading={changes.loading} onSelect={assetId => {
+      const key = selectFlowContext(monitor.data, assetId, Date.now()).futures?.marketKey;
+      if (key) chooseMarket(key);
+    }}/>
+    {changes.error ? <div className="position-visible-warning" role="status">持仓比较起点不可用：{changes.error}</div> : null}
     <div className="flow-mobile-switch"><button className={mobilePane === 'events' ? 'selected' : ''} onClick={() => setMobilePane('events')}>异常事件 <span>{filteredEvents.length}</span></button><button className={mobilePane === 'chart' ? 'selected' : ''} onClick={() => setMobilePane('chart')}>{chosen?.market.symbol ?? '市场'}图表</button></div>
     <div className={`flow-layout flow-mobile-${mobilePane}`}>
       <aside className="flow-event-rail" aria-label="异常事件列表"><div className="flow-rail-heading"><h2>{eventScope === 'latest' ? '最新事件' : '区间事件'}<span>{filteredEvents.length}</span></h2><span>{status ? clockTime(status.asOf) : '等待数据'}</span></div>
@@ -183,8 +203,9 @@ export default function FlowDashboard({ settings, snapshot, onOpenSettings }: { 
         <div className="flow-market-toolbar"><div className="flow-market-select"><label htmlFor="flow-market">观察市场</label><input aria-label="搜索观察市场" placeholder="搜索交易对" value={marketSearch} onChange={input => setMarketSearch(input.target.value)}/><select id="flow-market" value={marketKey ?? ''} onChange={input => chooseMarket(input.target.value)}>{marketKey && !selectedMarketChoices.some(item => item.market.key === marketKey) ? <option value={marketKey}>{chosen?.market.symbol ?? marketKey}</option> : null}{!rows.length ? <option value="">等待市场清单</option> : null}{selectedMarketChoices.map(row => <option key={row.market.key} value={row.market.key}>{row.market.symbol} · {row.market.venue === 'futures' ? '合约' : '现货'}</option>)}</select></div><button className="flow-live-button" onClick={() => { setSelectedEvent(null); setPendingEventId(null); setRange('1h'); }} aria-pressed={!isReplay}><i className={!isReplay ? 'active' : ''}/>{isReplay ? '返回实时' : '实时观察'}</button></div>
         <div className="flow-asset-heading"><div><h2>{chosen?.market.symbol ?? '选择市场'}<span>{chosen?.market.venue === 'spot' ? '现货' : '永续合约'}</span></h2><strong>{number(chosen?.price)}<small>{quote}</small></strong></div><div className={`flow-readiness ${chosen?.status ?? 'warming'}`}><i/>{statusText(chosen)}<small>当前指标 {chosen ? clockTime(chosen.asOf) : '—'}</small></div></div>
         {chosen?.status !== 'live' || !chosen ? <p className="flow-market-reason"><Icon name="warning" size={14}/>{chosen?.reason ?? '等待市场数据。尚未取得的指标保持空值。'}</p> : null}
-        <div className="flow-metrics-strip"><div><span>价格 / 5m</span><strong className={(chosen?.priceChange5m ?? 0) > 0 ? 'change-up' : (chosen?.priceChange5m ?? 0) < 0 ? 'change-down' : ''}>{signed(chosen?.priceChange5m ?? null)}</strong></div><div><span>成交额 / 5m <small>{quote}</small></span><strong>{number(chosen?.volume5m, true)}</strong></div><div><span>主动买入 / 5m</span><strong>{percent(chosen?.buyShare5m)}</strong></div><div><span>放量倍数</span><strong>{chosen?.volumeMultiple == null ? '—' : `${number(chosen.volumeMultiple)}×`}</strong></div><div><span>OI 数量 / 5m</span><strong>{signed(chosen?.oiChange5m ?? null)}</strong></div></div>
-        <div className="flow-secondary-metrics"><div><span>资金费率</span><strong>{chosen?.funding?.fundingRate == null ? '—' : `${(chosen.funding.fundingRate * 100).toLocaleString('en-US', { maximumFractionDigits: 5 })}%`}</strong><small>{chosen?.funding?.fundingIntervalHours == null ? '周期待核实' : `每 ${chosen.funding.fundingIntervalHours}h`}</small></div><div><span>下次结算</span><strong>{clockTime(chosen?.funding?.nextFundingTime)}</strong></div><div><span>买卖价差</span><strong>{bps(depth?.spreadBps)}</strong></div><div><span>VWAP / 5m</span><strong>{number(chosen?.vwap5m)}</strong></div><div><span>ATR / 14×1m</span><strong>{number(chosen?.atr14)}</strong></div></div>
+        <PositionPanel value={position} flow={monitor.data} now={renderNow} preferredMarketKey={marketKey} replay={isReplay} loading={changes.loading}/>
+        <div className="flow-metrics-strip"><div><span>所选交易对成交额 / 5m <small>{quote}</small></span><strong>{number(tradeReady ? chosen?.volume5m : null, true)}</strong></div><div><span>放量倍数</span><strong>{!tradeReady || chosen?.volumeMultiple == null ? '—' : `${number(chosen.volumeMultiple)}×`}</strong></div><div><span>单合约 OI 数量 / 5m</span><strong>{signed(tradeReady ? chosen?.oiChange5m ?? null : null)}</strong></div></div>
+        <div className="flow-secondary-metrics"><div><span>买卖价差</span><strong>{bps(depth?.spreadBps)}</strong></div><div><span>VWAP / 5m</span><strong>{number(tradeReady ? chosen?.vwap5m : null)}</strong></div><div><span>ATR / 14×1m</span><strong>{number(tradeReady ? chosen?.atr14 : null)}</strong></div></div>
         <div className="flow-chart-controls"><div className="flow-timeframe" aria-label="K线周期">{([1, 5] as const).map(minutes => <button key={minutes} className={interval === minutes ? 'selected' : ''} aria-pressed={interval === minutes} onClick={() => setIntervalSize(minutes)}>{minutes}m</button>)}</div><div className="flow-range" aria-label="证据时间范围">{isReplay ? <button className={range === 'event' ? 'selected' : ''} onClick={() => setRange('event')}>事件 ±15m</button> : null}{(['1h', '24h', '7d'] as const).map(item => <button key={item} className={range === item ? 'selected' : ''} aria-pressed={range === item} onClick={() => setRange(item)}>{item === '7d' ? '7 天' : item}</button>)}</div><span>{historyLoading ? '读取证据…' : isReplay ? '固定事件回放' : '随市场更新'}</span><button className="icon-button" aria-label="重新读取事件历史" onClick={() => setRequestVersion(version => version + 1)}><Icon name="refresh" size={15}/></button></div>
         {isReplay ? <><div className="flow-replay-banner"><span><Icon name="chart" size={15}/>{event.title}</span><strong>{dateTime(event.timestamp)}</strong><button onClick={() => { setSelectedEvent(null); setRange('1h'); }}>退出回放<Icon name="close" size={13}/></button></div><div className="flow-trigger-summary"><p><strong>触发</strong>{event.reason}</p><p><strong>失效</strong>{event.invalidation}</p></div></> : <div className="flow-readiness-summary"><span>放量基准 <strong>{chosen?.baselineWindows ?? 0}</strong> 个 5m 窗口</span><span>大额样本 <strong>{chosen?.tradeSamples ?? 0}</strong></span><span>动态门槛 <strong>{number(chosen?.largeTradeThreshold, true)}</strong> {quote}</span></div>}
         {!depth ? <div className="flow-coverage-note">盘口：{chosen?.depth?.reason ?? '当前市场尚无有效深度'} · {settings.mode === 'direct' ? '深度与现货仅覆盖已核实的所选交易对，不是全市场覆盖。' : '后台仅采集其已配置的深度与现货市场；切换标的不自动扩大覆盖。'}</div> : null}
