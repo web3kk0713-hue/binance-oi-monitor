@@ -4,6 +4,7 @@ import type { FlowMetrics, FlowSnapshot, FlowVenue } from './flowTypes';
 export interface FlowContextRow {
   marketKey: string; symbol: string; quoteAsset: string; asOf: number;
   buyShare5m: number | null; delta5m: number | null; priceChange5m: number | null;
+  oiChange5m: number | null; windowStart: number | null; windowEnd: number | null;
   fundingRate: number | null; fundingIntervalHours: number | null; nextFundingTime: number | null;
   reason: string;
 }
@@ -36,7 +37,8 @@ function project(row: FlowMetrics, snapshotAt: number, now: number): FlowContext
   const result: FlowContextRow = {
     marketKey: row.market.key, symbol: row.market.symbol, quoteAsset: row.market.quoteAsset,
     asOf: timestamp(row.asOf) && row.asOf <= now ? row.asOf : 0,
-    buyShare5m: null, delta5m: null, priceChange5m: null,
+    buyShare5m: null, delta5m: null, priceChange5m: null, oiChange5m: null,
+    windowStart: null, windowEnd: null,
     fundingRate: null, fundingIntervalHours: null, nextFundingTime: null, reason: '',
   };
   const unavailable = observationIssue(row, snapshotAt, now);
@@ -46,10 +48,16 @@ function project(row: FlowMetrics, snapshotAt: number, now: number): FlowContext
   const tradeUnavailable = tradeIssue(row, now);
   if (tradeUnavailable) reasons.push(tradeUnavailable);
   else {
+    // This is the flow engine's closed-candle window, not lastCandleAt (which may
+    // belong to a currently open candle). OI uses observations near these bounds.
+    result.windowEnd = Math.floor(row.asOf / 60_000) * 60_000;
+    result.windowStart = result.windowEnd - 5 * 60_000;
     result.buyShare5m = finite(row.buyShare5m) && row.buyShare5m >= 0 && row.buyShare5m <= 100 ? row.buyShare5m : null;
     result.delta5m = finite(row.delta5m) ? row.delta5m : null;
-    result.priceChange5m = finite(row.priceChange5m) ? row.priceChange5m : null;
+    result.priceChange5m = finite(row.priceChange5m) && row.priceChange5m >= -100 ? row.priceChange5m : null;
+    result.oiChange5m = row.market.venue === 'futures' && finite(row.oiChange5m) && row.oiChange5m >= -100 ? row.oiChange5m : null;
     if ([result.buyShare5m, result.delta5m, result.priceChange5m].some(value => value === null)) reasons.push('部分5分钟成交数据不可用');
+    if (row.market.venue === 'futures' && result.oiChange5m === null) reasons.push('同合约5分钟 OI 连续观测不足或无效');
   }
 
   // Funding is a separate observation, so a valid quote can survive trade-window warmup.
@@ -82,7 +90,10 @@ export function selectFlowContext(snapshot: FlowSnapshot | null, assetId: string
   if (!snapshot || !assetId || !Array.isArray(snapshot.rows)) return { futures: null, spot: null };
   const snapshotAt = snapshot.status?.asOf;
   const select = (venue: FlowVenue): FlowContextRow | null => {
-    const rows = snapshot.rows.filter(row => row.market?.assetId === assetId && row.market.venue === venue);
+    const rows = snapshot.rows.filter(row => row?.market?.assetId === assetId && row.market.venue === venue
+      && typeof row.market.symbol === 'string' && row.market.symbol.length > 0
+      && row.market.key === `${venue}:${row.market.symbol}`
+      && typeof row.market.quoteAsset === 'string' && row.market.quoteAsset.length > 0);
     const readiness = (row: FlowMetrics) => observationIssue(row, snapshotAt, now) ? 2 : tradeIssue(row, now) ? 1 : 0;
     rows.sort((a, b) => Number(b.market.key === preferredMarketKey) - Number(a.market.key === preferredMarketKey)
       || readiness(a) - readiness(b) || quoteRank(a.market.quoteAsset) - quoteRank(b.market.quoteAsset)

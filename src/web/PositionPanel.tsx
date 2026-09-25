@@ -3,6 +3,8 @@ import { POSITION_THRESHOLDS, type PositionContext } from '../shared/positionCon
 import { selectFlowContext, type FlowContextRow } from '../shared/flowContext';
 import type { FlowSnapshot } from '../shared/flowTypes';
 import { clockTime, dateTime, percent, signed } from './format';
+import { assessDirection } from '../shared/direction';
+import { DirectionPanel } from './DirectionPanel';
 import './position.css';
 
 const valueClass = (value: number | null) => value === null || value === 0 ? '' : value > 0 ? 'change-up' : 'change-down';
@@ -31,15 +33,18 @@ function TradeContext({ row, venue }: { row: FlowContextRow | null; venue: strin
     <small>{row?.buyShare5m != null ? `价格 ${signed(row.priceChange5m)} · ${clockTime(row.asOf)}` : row?.reason ?? '选择标的后采集，缺失不补零'}</small></div>;
 }
 
-export function PositionPanel({ value, flow, now, preferredMarketKey, replay = false, loading = false }: {
-  value: PositionContext | undefined; flow: FlowSnapshot | null; now: number; preferredMarketKey?: string | null; replay?: boolean; loading?: boolean;
+export function PositionPanel({ value, flow, now, assetId, preferredMarketKey, replay = false, loading = false }: {
+  value: PositionContext | undefined; flow: FlowSnapshot | null; now: number; assetId?: string; preferredMarketKey?: string | null; replay?: boolean; loading?: boolean;
 }) {
-  const context = useMemo(() => selectFlowContext(flow, value?.assetId, now, preferredMarketKey), [flow, value?.assetId, now, preferredMarketKey]);
+  const selectedAssetId = assetId ?? value?.assetId;
+  const context = useMemo(() => selectFlowContext(flow, selectedAssetId, now, preferredMarketKey), [flow, selectedAssetId, now, preferredMarketKey]);
+  const direction = useMemo(() => assessDirection(flow, selectedAssetId, now, preferredMarketKey), [flow, selectedAssetId, now, preferredMarketKey]);
   const funding = context.futures;
   return <section className="position-panel" aria-label="当前标的持仓与价格联动">
     <div className="position-heading"><div><span>当前观察 · 币种合约聚合</span><h2>{value?.symbol ?? '等待标的'}<small>持仓 × 价格</small></h2></div>
       <div className="position-heading-state">{value && !loading ? <PositionBadge value={value}/> : <span className="position-badge unavailable">{loading ? '读取起点' : '等待数据'}</span>}<small>{value ? `${value.windowMinutes}m · ${clockTime(value.endAt)}` : '尚无观测'}</small></div></div>
     {replay ? <p className="position-visible-warning">以下是当前快照，不是所选历史事件的触发证据。</p> : null}
+    <DirectionPanel value={direction} replay={replay}/>
     <div className="position-primary">
       <div><span>OI 数量变化</span><strong className={valueClass(value?.oiQuantityPct ?? null)}>{signed(value?.oiQuantityPct ?? null, '%', 3)}</strong><small>归一化币数量，不含价格涨跌</small></div>
       <div><span>价格变化</span><strong className={valueClass(value?.pricePct ?? null)}>{signed(value?.pricePct ?? null, '%', 3)}</strong><small>同一对快照端点 · 指数价格</small></div>

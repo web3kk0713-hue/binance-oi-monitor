@@ -26,7 +26,8 @@ function snapshot(rows: FlowMetrics[], asOf = NOW): FlowSnapshot {
 function select(changes: Partial<FlowMetrics> = {}) {
   return selectFlowContext(snapshot([row(changes)]), assetId, NOW).futures!;
 }
-const unavailable = { buyShare5m: null, delta5m: null, priceChange5m: null, fundingRate: null, fundingIntervalHours: null, nextFundingTime: null };
+const unavailable = { buyShare5m: null, delta5m: null, priceChange5m: null, oiChange5m: null,
+  windowStart: null, windowEnd: null, fundingRate: null, fundingIntervalHours: null, nextFundingTime: null };
 
 describe('single-asset, single-market confirmation context', () => {
   it('requires an exact asset identity and keeps a missing venue empty', () => {
@@ -86,7 +87,13 @@ describe('single-asset, single-market confirmation context', () => {
 
   it('never leaks futures funding into a spot row', () => {
     const result = selectFlowContext(snapshot([row({ market: market({ key: 'spot:BTCUSDT', venue: 'spot' }) })]), assetId, NOW).spot;
-    expect(result).toMatchObject({ buyShare5m: 60, fundingRate: null, fundingIntervalHours: null, nextFundingTime: null });
+    expect(result).toMatchObject({ buyShare5m: 60, oiChange5m: null, fundingRate: null, fundingIntervalHours: null, nextFundingTime: null });
+  });
+
+  it('projects same-contract OI and the engine closed-candle bounds, not the latest candle source stamp', () => {
+    expect(select()).toMatchObject({ oiChange5m: 2, windowStart: NOW - 300_000, windowEnd: NOW });
+    expect(select({ lastCandleAt: NOW - 59_999 })).toMatchObject({ windowStart: NOW - 300_000, windowEnd: NOW });
+    expect(select({ status: 'warming' })).toMatchObject({ oiChange5m: null, windowStart: null, windowEnd: null });
   });
 });
 
@@ -148,6 +155,15 @@ describe('metric and funding validation', () => {
 
   it.each([-0.001, 100.001])('rejects impossible buy share %s without suppressing other valid metrics', buyShare5m => {
     expect(select({ buyShare5m })).toMatchObject({ buyShare5m: null, delta5m: 20_000, priceChange5m: 1.2 });
+  });
+
+  it.each([NaN, Infinity, -Infinity, undefined, null, -100.00001])('rejects invalid OI and impossible percent changes %s', value => {
+    expect(select({ oiChange5m: value as number, priceChange5m: value as number }))
+      .toMatchObject({ oiChange5m: null, priceChange5m: null });
+  });
+
+  it('preserves mathematically valid minus-100 percent endpoints as descriptive context', () => {
+    expect(select({ oiChange5m: -100, priceChange5m: -100 })).toMatchObject({ oiChange5m: -100, priceChange5m: -100 });
   });
 
   it('requires the exact same funding market key', () => {

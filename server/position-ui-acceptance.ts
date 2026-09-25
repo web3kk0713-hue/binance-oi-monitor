@@ -15,13 +15,21 @@ const MINUTE = 60_000;
 const WINDOW = 5 * MINUTE;
 const startedAt = Date.now();
 const syntheticLabel = '合成验收样本 · 非真实行情 · 无上游连接';
-const definitions = [
-  { symbol: 'TEST_FLAT', oi: .10, price: .002, missingFdv: false },
+interface Definition {
+  symbol: string; oi: number; price: number; missingFdv: boolean;
+  futuresBuyShare?: number; spotBuyShare?: number; missingFunding?: boolean; missingNativeOi?: boolean;
+}
+const definitions: readonly Definition[] = [
+  { symbol: 'TEST_FLAT', oi: .10, price: .002, missingFdv: false, spotBuyShare: 62 },
   { symbol: 'TEST_UP', oi: .06, price: .04, missingFdv: false },
   { symbol: 'TEST_DOWN', oi: -.08, price: -.05, missingFdv: false },
   { symbol: 'TEST_MISSING', oi: .10, price: 0, missingFdv: true },
-] as const;
-type Definition = typeof definitions[number];
+  { symbol: 'TEST_LONG', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 62 },
+  { symbol: 'TEST_SHORT', oi: .09, price: -.02, missingFdv: false, futuresBuyShare: 32, spotBuyShare: 38 },
+  { symbol: 'TEST_CONFLICT', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 35 },
+  { symbol: 'TEST_FUNDING_MISSING', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 62, missingFunding: true },
+  { symbol: 'TEST_NO_OI', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 62, missingNativeOi: true },
+];
 
 let staleAt: number | null = null;
 let lastSnapshotAt = startedAt;
@@ -68,10 +76,12 @@ function assetAt(item: Definition, at: number, end: number): AssetRow {
 }
 
 function sample(at: number): Snapshot {
+  const assetCount = definitions.length;
+  const fdvCount = definitions.filter(item => !item.missingFdv).length;
   return {
     schemaVersion: 1, mode: 'server', startedAt: at - 1500, asOf: at, durationMs: 1500,
-    collectionIntervalMs: 30_000, universe: { contracts: 4, assets: 4 },
-    coverage: { oi: 4, marketCap: 4, fdv: 3, eligible: 3, failedContracts: 0 },
+    collectionIntervalMs: 30_000, universe: { contracts: assetCount, assets: assetCount },
+    coverage: { oi: assetCount, marketCap: assetCount, fdv: fdvCount, eligible: fdvCount, failedContracts: 0 },
     assets: definitions.map(item => assetAt(item, at, at)),
     errors: [syntheticLabel, ...(staleAt === null ? [] : ['合成测试：当前快照故意停在 120 秒前，不能用于实时判断'])],
   };
@@ -93,8 +103,12 @@ function market(item: Definition, venue: 'futures' | 'spot' = 'futures'): FlowMa
   const symbol = contractSymbol(item);
   return { key: `${venue}:${symbol}`, venue, symbol, baseAsset: item.symbol, quoteAsset: 'USDT', assetId: assetId(item) };
 }
-const markets = [...definitions.map(item => market(item)), market(definitions[0], 'spot')];
+const markets = [
+  ...definitions.map(item => market(item)),
+  ...definitions.filter(item => item.spotBuyShare !== undefined).map(item => market(item, 'spot')),
+];
 const definitionFor = (value: FlowMarket) => definitions.find(item => assetId(item) === value.assetId)!;
+const buyShareFor = (item: Definition, venue: 'futures' | 'spot') => venue === 'spot' ? item.spotBuyShare ?? 62 : item.futuresBuyShare ?? 65;
 
 function depthFor(value: FlowMarket, at: number, price: number): FlowDepth {
   return {
@@ -111,15 +125,16 @@ function flowRow(value: FlowMarket, at: number): FlowMetrics {
   const intentionallyStale = item.symbol === 'TEST_UP';
   const rowAt = intentionallyStale ? at - 180_000 : at;
   const price = 2 * (1 + item.price);
-  const buyShare = value.venue === 'spot' ? 62 : 65;
+  const buyShare = buyShareFor(item, value.venue);
   return {
     market: value, asOf: rowAt, status: intentionallyStale || staleAt !== null ? 'stale' : 'live',
-    reason: intentionallyStale ? '合成测试：该市场订单流与资金费率故意过期，应显示不可用' : syntheticLabel,
+    reason: intentionallyStale ? '合成测试：该市场订单流与资金费率故意过期，应显示不可用'
+      : item.missingNativeOi ? '合成测试：5m 单合约 OI 基线正在预热；不能借用估值页 OI 代替' : syntheticLabel,
     price, priceChange5m: item.price * 100, volume5m: 1_000_000, buyShare5m: buyShare,
     delta5m: 1_000_000 * (2 * buyShare / 100 - 1), volumeMultiple: 2.2,
     vwap5m: price * .999, range5mPct: Math.abs(item.price) * 100 + .2, atr14: .012,
-    oiChange5m: value.venue === 'futures' ? item.oi * 100 : null,
-    funding: value.venue === 'spot' ? null : {
+    oiChange5m: value.venue === 'futures' && !item.missingNativeOi ? item.oi * 100 : null,
+    funding: value.venue === 'spot' || item.missingFunding ? null : {
       marketKey: value.key, markPrice: price, indexPrice: price,
       fundingRate: .0001, fundingIntervalHours: 8,
       nextFundingTime: Math.floor(at / (8 * 3_600_000) + 1) * 8 * 3_600_000,
@@ -132,21 +147,31 @@ function flowRow(value: FlowMarket, at: number): FlowMetrics {
 
 // Stable ID and time allow replay to remain selected across repeated polling.
 const eventTime = startedAt - 2 * MINUTE;
-const replayMarket = markets[0];
-const replayPrice = assetAt(definitions[0], eventTime, startedAt).priceUsd!;
-const event: FlowEvent = {
-  id: 'synthetic-position-flat-buy', ruleVersion: 'flow-v1', marketKey: replayMarket.key,
-  symbol: replayMarket.symbol, assetId: replayMarket.assetId, venue: 'futures', quoteAsset: 'USDT',
-  kind: 'large_buy', severity: 'warning', title: '合成测试 · 大额主动买入',
-  timestamp: eventTime, detectedAt: eventTime + 500, referencePrice: replayPrice,
-  evidence: [{ label: '单笔成交额', value: 75_000, unit: 'USDT', baseline: 50_000 }, { label: '主动买入占比', value: 65, unit: '%' }],
-  reason: '合成验收事件，用于验证固定回放与当前持仓指标分离；不是交易所事件。',
-  invalidation: '仅 UI 验收，不构成多空建议或已验证策略。', dataStatus: 'complete',
-  rawTrade: { marketKey: replayMarket.key, id: 'synthetic-trade-1', price: String(replayPrice),
-    quantity: String(75_000 / replayPrice), quoteQuantity: '75000', timestamp: eventTime, receivedAt: eventTime + 500, side: 'buy' },
-  outcomes: [{ minutes: 1, price: replayPrice * 1.001, changePct: .1,
-    availableAt: eventTime + MINUTE + 1500, entryPrice: replayPrice, entryAt: eventTime + 1000 }],
-};
+function syntheticEvent(symbol: string, side: 'buy' | 'sell', id: string): FlowEvent {
+  const item = definitions.find(value => value.symbol === symbol)!;
+  const replayMarket = market(item), replayPrice = assetAt(item, eventTime, startedAt).priceUsd!;
+  const changePct = side === 'buy' ? .1 : -.1;
+  return {
+    id, ruleVersion: 'flow-v1', marketKey: replayMarket.key,
+    symbol: replayMarket.symbol, assetId: replayMarket.assetId, venue: 'futures', quoteAsset: 'USDT',
+    kind: side === 'buy' ? 'large_buy' : 'large_sell', severity: 'warning',
+    title: `合成测试 · ${side === 'buy' ? '大额主动买入' : '大额主动卖出'}`,
+    timestamp: eventTime, detectedAt: eventTime + 500, referencePrice: replayPrice,
+    evidence: [{ label: '单笔成交额', value: 75_000, unit: 'USDT', baseline: 50_000 },
+      { label: '主动买入占比', value: buyShareFor(item, 'futures'), unit: '%' }],
+    reason: '合成验收事件，用于验证固定回放与当前方向评估分离；不是交易所事件，不包含历史方向结论。',
+    invalidation: '仅 UI 验收，不构成多空建议或已验证策略。', dataStatus: 'complete',
+    rawTrade: { marketKey: replayMarket.key, id: `${id}-trade`, price: String(replayPrice),
+      quantity: String(75_000 / replayPrice), quoteQuantity: '75000', timestamp: eventTime, receivedAt: eventTime + 500, side },
+    outcomes: [{ minutes: 1, price: replayPrice * (1 + changePct / 100), changePct,
+      availableAt: eventTime + MINUTE + 1500, entryPrice: replayPrice, entryAt: eventTime + 1000 }],
+  };
+}
+const events = [
+  syntheticEvent('TEST_FLAT', 'buy', 'synthetic-position-flat-buy'),
+  syntheticEvent('TEST_LONG', 'buy', 'synthetic-direction-long-buy'),
+  syntheticEvent('TEST_SHORT', 'sell', 'synthetic-direction-short-sell'),
+];
 
 function flowSnapshot(): FlowSnapshot {
   const at = observationTime();
@@ -158,9 +183,9 @@ function flowSnapshot(): FlowSnapshot {
       markets: rows.length, readyMarkets: rows.filter(row => row.status === 'live').length,
       warmingMarkets: 0, staleMarkets: rows.filter(row => row.status === 'stale').length,
       backfilledMarkets: rows.length, errors: [syntheticLabel], retentionDays: 7,
-      scope: `${syntheticLabel}；4 个合约与 TEST_FLAT 现货，TEST_UP 订单流故意过期。`,
+      scope: `${syntheticLabel}；${definitions.length} 个合约与 ${markets.length - definitions.length} 个现货；TEST_UP 订单流故意过期。`,
     },
-    rows, events: [event],
+    rows, events,
   };
 }
 
@@ -169,7 +194,7 @@ function flowHistory(value: FlowMarket | undefined, from: number, to: number): F
   if (!value) return result;
   const item = definitionFor(value), end = lastSnapshotAt;
   const observedTo = Math.min(to, observationTime());
-  const share = value.venue === 'spot' ? .62 : .65;
+  const share = buyShareFor(item, value.venue) / 100;
   const candles: FlowCandle[] = [], oi: FlowOi[] = [];
   for (let openTime = Math.floor(from / MINUTE) * MINUTE; openTime + MINUTE <= observedTo; openTime += MINUTE) {
     const closeTime = openTime + MINUTE - 1;
@@ -180,13 +205,13 @@ function flowHistory(value: FlowMarket | undefined, from: number, to: number): F
       volume: 200_000 / close, quoteVolume: 200_000, takerBuyQuote: 200_000 * share,
       trades: 240, closed: true, sourceTime: closeTime, receivedAt: closeTime + 1, source: 'rest' });
   }
-  if (value.venue === 'futures') {
+  if (value.venue === 'futures' && !item.missingNativeOi) {
     for (let timestamp = from; timestamp <= observedTo; timestamp += 30_000) {
       oi.push({ marketKey: value.key, quantity: assetAt(item, timestamp, end).oiQuantity!, timestamp, receivedAt: timestamp });
     }
   }
   result.candles = candles; result.oi = oi;
-  result.events = event.marketKey === value.key && event.timestamp >= from && event.detectedAt <= observedTo ? [event] : [];
+  result.events = events.filter(event => event.marketKey === value.key && event.timestamp >= from && event.detectedAt <= observedTo);
   const depth = depthFor(value, observedTo, assetAt(item, observedTo, end).priceUsd!);
   if (depth.timestamp >= from) result.depth = [depth];
   return result;
@@ -231,7 +256,7 @@ app.get<{ Querystring: { marketKey?: string; hours?: string; to?: string } }>('/
   const hours = boundedHours(request.query.hours, 24);
   return flowHistory(markets.find(value => value.key === request.query.marketKey), to - hours * 3_600_000, to);
 });
-app.get<{ Querystring: { marketKey?: string } }>('/api/v1/flow/events', async request => !request.query.marketKey || request.query.marketKey === event.marketKey ? [event] : []);
+app.get<{ Querystring: { marketKey?: string } }>('/api/v1/flow/events', async request => events.filter(event => !request.query.marketKey || request.query.marketKey === event.marketKey));
 app.get('/api/v1/alerts', async () => []);
 app.get('/api/v1/push/key', async () => ({ publicKey: null }));
 
@@ -242,8 +267,13 @@ function boundedHours(raw: string | undefined, fallback: number): number {
 
 app.get('/acceptance', async (_request, reply) => reply.type('text/html').send(`<!doctype html><html lang="zh"><meta charset="utf-8"><title>合成验收 · 非真实行情</title>
 <body><h1>仅本机合成验收 · 非真实行情</h1><p>无交易所连接、无持久数据库。所有 TEST_* 数据都是 UI 验收夹具。</p>
-<ul><li>TEST_FLAT：5m OI 数量 +10%，价格/FDV +0.2%，OI/FDV 相对增长 +10%。</li><li>TEST_UP：+6% / +4%，但订单流故意过期。</li><li>TEST_DOWN：−8% / −5%。</li><li>TEST_MISSING：OI +10%，价格不变，FDV 缺失。</li></ul>
-<p>TEST_FLAT 合约/现货主动买入为 65%/62%；费率 0.01%，8h。点击合成事件可验证回放。</p>
+<ul><li>TEST_FLAT：5m OI 数量 +10%，价格/FDV +0.2%，OI/FDV 相对增长 +10%；价格未达到方向阈值。</li><li>TEST_UP：+6% / +4%，但订单流故意过期。</li><li>TEST_DOWN：−8% / −5%，减仓不直接判空。</li><li>TEST_MISSING：OI +10%，价格不变，FDV 缺失。</li>
+<li>TEST_LONG：5m OI +8%，价格 +2%，合约/现货主动买入 68%/62%；用于多方候选验收。</li>
+<li>TEST_SHORT：5m OI +9%，价格 −2%，合约/现货主动买入 32%/38%；用于空方候选验收。</li>
+<li>TEST_CONFLICT：5m OI +8%，价格 +2%，合约买入 68% 但现货仅 35%；用于冲突观望验收。</li>
+<li>TEST_FUNDING_MISSING：同向买入与 OI/价格条件具备，但资金费率缺失；必须显示风险未知。</li>
+<li>TEST_NO_OI：估值页 OI 有变化，但单合约 5m OI 基线缺失；必须继续预热，不能借用聚合 OI 给方向。</li></ul>
+<p>除 TEST_FUNDING_MISSING 与故意过期样本外，费率 0.01%，8h。点击合成买入/卖出事件可验证回放与当前方向分离。所有数值均为验收样本，不是交易建议。</p>
 <button data-view="changes">打开变化监控合成验收</button><button data-view="flow">打开异常监控合成验收</button>
 <p>终端命令：stale（快照故意过期）、live（恢复新鲜）、status、stop。更改后点击页面刷新或等待轮询。</p>
 <script>document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{localStorage.setItem('oi-monitor:v1:settings',JSON.stringify({mode:'server',backendUrl:location.origin,notifications:false}));location.href='/?view='+button.dataset.view;});</script></body></html>`));
