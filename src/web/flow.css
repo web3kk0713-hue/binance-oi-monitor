@@ -7,7 +7,7 @@
 .flow-statusbar > button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; color: #0875e1; padding: 9px 0; }
 .flow-mode-limit { color: #7c8490; }
 .flow-workspace > .status-message { margin: 14px 0 0; }
-.flow-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 20px 0 18px; }
+.flow-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 16px 0 12px; }
 .flow-page-heading h1 { display: flex; align-items: center; gap: 11px; font-size: 22px; font-weight: 630; letter-spacing: -.5px; }
 .flow-page-heading h1 > span { color: #77808b; border: 1px solid #dde1e7; background: #fafbfc; padding: 3px 6px; border-radius: 4px; font-size: 11px; font-weight: 450; letter-spacing: 0; }
 .flow-page-heading p { color: #78808b; font-size: 12px; margin-top: 6px; }
@@ -40,17 +40,17 @@
 .flow-event-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; padding: 0 15px 14px; }
 .flow-event-filters select { width: 100%; min-width: 0; height: 32px; border: 1px solid #e1e5eb; border-radius: 5px; background: #fff; color: #68717d; font: inherit; font-size: 12px; padding: 0 6px; }
 .flow-event-list { border-top: 1px solid #e8ebef; max-height: calc(100dvh - 274px); min-height: 330px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d7dce4 transparent; }
-.flow-event-item { display: block; width: 100%; padding: 15px 17px; text-align: left; border-bottom: 1px solid #eceef2; border-left: 3px solid transparent; }
+.flow-event-item { display: block; width: 100%; padding: 11px 14px; text-align: left; border-bottom: 1px solid #eceef2; border-left: 3px solid transparent; }
 .flow-event-item:hover { background: #f8fafc; }
 .flow-event-item.selected { background: #f0f6fe; border-left-color: #0875e1; }
 .flow-event-item > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .flow-event-item strong { font-size: 14px; font-weight: 620; }
 .flow-event-item time { color: #818995; font-size: 11px; }
-.flow-event-title { display: flex; align-items: center; gap: 7px; margin-top: 8px; font-size: 13px; color: #5f4b7e; }
+.flow-event-title { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-size: 12px; color: #5f4b7e; }
 .flow-event-item.buy .flow-event-title { color: #16866b; }
 .flow-event-item.sell .flow-event-title { color: #c93646; }
 .flow-event-title > i { font-style: normal; padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; opacity: .8; }
-.flow-event-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 7px; margin-top: 9px; color: #818995; font-size: 11px; line-height: 1.5; }
+.flow-event-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; color: #68717d; font-size: 11px; line-height: 1.5; }
 .flow-event-meta > span:last-child { overflow-wrap: anywhere; }
 .flow-empty-events { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; min-height: 340px; padding: 40px 24px; text-align: center; color: #a2abb8; }
 .flow-empty-events strong { color: #5e6978; font-weight: 550; font-size: 14px; }
@@ -62,7 +62,7 @@
 .flow-market-select input { width: 112px; padding: 7px 8px; border: 1px solid #e1e5eb; border-radius: 5px; background: #fff; font-size: 12px; }
 .flow-market-select select { min-width: 158px; max-width: 280px; min-height: 33px; border: 1px solid #e1e5eb; border-radius: 5px; padding: 5px 7px; font: inherit; font-size: 13px; background: #fff; color: #333c48; }
 .flow-live-button { display: inline-flex; align-items: center; gap: 6px; color: #68717d; padding: 8px 0 8px 6px; font-size: 12px; white-space: nowrap; }
-.flow-asset-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 20px 21px 13px; }
+.flow-asset-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 18px 12px; }
 .flow-asset-heading h2 { display: flex; align-items: center; gap: 9px; font-size: 20px; font-weight: 630; letter-spacing: -.4px; }
 .flow-asset-heading h2 > span { font-size: 11px; font-weight: 400; color: #78828f; letter-spacing: 0; }
 .flow-asset-heading > div > strong { display: flex; align-items: baseline; gap: 7px; margin-top: 7px; font-size: 23px; font-weight: 580; letter-spacing: -.45px; }
@@ -150,6 +150,8 @@
 .flow-raw-evidence[open] summary svg, .flow-source-details[open] summary svg { transform: rotate(90deg); }
 .flow-raw-evidence pre { padding: 15px; margin: 13px 0 0; max-height: 320px; overflow: auto; background: #f7f8fa; border: 1px solid #e8ebef; border-radius: 6px; font-size: 11px; line-height: 1.8; color: #667587; }
 .flow-rule-evidence > div { display: flex; justify-content: space-between; align-items: center; gap: 15px; }
+.flow-rule-evidence > summary { cursor: pointer; color: #68717d; font-size: 12px; }
+.flow-rule-evidence[open] > div { margin-top: 12px; }
 .flow-rule-evidence p { font-size: 12px; line-height: 1.8; color: #788391; margin-top: 11px; }
 .flow-rule-evidence dl { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 21px; margin: 17px 0 0; }
 .flow-rule-evidence dl > div { display: flex; flex-direction: column; gap: 6px; }

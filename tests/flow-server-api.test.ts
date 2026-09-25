@@ -74,6 +74,17 @@ afterEach(async () => {
 });
 
 describe('flow API and lifecycle', () => {
+  it('passes independent mark observations through the backend snapshot API without funding or new requests', async () => {
+    const { app, flowStore } = await appSetup();
+    const sample = snapshot();
+    sample.marks = [{ marketKey: market.key, markPrice: '101.1234567890123456789',
+      sourceTime: at - 1000, receivedAt: at - 500, source: 'binance-mark-stream' }];
+    await flowStore.saveSnapshot(sample);
+    const sourceFetch = vi.spyOn(globalThis, 'fetch');
+    const response = await app.inject('/api/v1/flow/snapshot');
+    expect(response.statusCode).toBe(200); expect(response.json().marks).toEqual(sample.marks);
+    expect(response.json().rows[0].funding).toBeNull(); expect(sourceFetch).not.toHaveBeenCalled();
+  });
   it('does not construct a feed or open any source connection when startJobs is false', async () => {
     const factory = vi.fn(() => { throw new Error('Must not create network feed'); });
     const { app, collector } = await appSetup({ factory });

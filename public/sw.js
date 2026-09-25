@@ -26,7 +26,7 @@ self.addEventListener('notificationclick', (event) => {
     if (client) {
       await client.focus();
       const data = event.notification.data;
-      client.postMessage(data?.marketKey ? { type: 'select-flow-event', marketKey: data.marketKey, eventId: data.eventId } : { type: 'select-asset', assetId: data?.assetId });
+      client.postMessage(target.searchParams.get('view') === 'positions' ? { type: 'select-positions' } : data?.marketKey ? { type: 'select-flow-event', marketKey: data.marketKey, eventId: data.eventId } : { type: 'select-asset', assetId: data?.assetId });
       return;
     }
     return self.clients.openWindow(target.href);

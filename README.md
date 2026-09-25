@@ -127,6 +127,16 @@ pnpm probe
 
 ## 常驻后台
 
+### 工作台与手工持仓
+
+主界面为“市场机会 / 我的持仓 / 风险提醒”。市场机会保留变化、异常和 OI 估值；指标旁的说明按钮支持鼠标、键盘和手机点按。方向候选提供灵敏、标准、严格、自定义参数，各档均未验证盈利能力。
+
+“我的持仓”支持 USDT 线性永续手工记录。录入不启用提醒；系统以可核验同合约标记价及 ATR 提出波动距离草案，用户核对价格并确认计划后才监控。保护、止盈、移动保护与信号减弱均为提醒，不会下单或自动标记平仓。数量/盈亏是输入保证金和杠杆推算，未计手续费、资金费与滑点，不是账户真实仓位或强平预测。
+
+**手工仓位及计划仅保存在当前浏览器的私密 IndexedDB，不上传 GitHub 或公共行情 API。关页/休眠可能漏过触线；连接行情后台也不等于已部署后台仓位监控。** 修改方案需重新确认；跨标签通过原子状态与通知队列去重。详细合同、性能与验收边界见 `docs/workflow/workbench-upgrade.md`。
+
+### 行情服务部署
+
 后端源码在 `server/`，支持 PostgreSQL 及本地 SQLite；部署配置见 `compose.yaml` 和 `.env.example`。必须从目标机器实测 Binance 是否可访问，不能通过地区绕过限制来承诺可用性。
 
 只读 API：`GET /api/v1/history?assetId=binance:BTC&hours=168` 返回资产历史；`GET /api/v1/contracts/BTCUSDT/history?hours=168` 返回原始 OI/价格字符串和各自源时间、实际接收时间。订单流增加 `/api/v1/flow/snapshot`、`/api/v1/flow/events?marketKey=futures:BTCUSDT&limit=100`、`/api/v1/flow/history?marketKey=futures:BTCUSDT&hours=168`。历史从进程实际采集开始积累，不回填不存在的30秒点；事件 `before` 为发现时间游标，当前界面展示限量结果，不保证同毫秒多事件的无损逐页遍历。

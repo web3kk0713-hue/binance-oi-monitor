@@ -60,7 +60,15 @@ export async function saveFlowUpdate(update: FlowUpdate, markets: FlowMarket[], 
     const outcomes = old ? [...new Map([...e.outcomes, ...old.outcomes].map(o => [o.minutes, o])).values()].sort((a, b) => a.minutes - b.minutes) : e.outcomes;
     await tx.objectStore('events').put(old ? { ...old, outcomes } : e);
   }
-  for (const m of markets) await tx.objectStore('markets').put(m);
+  // Compare inside the serializable read/write transaction: another tab may have
+  // changed the directory, so a process-local "already saved" cache is unsafe.
+  const directory = tx.objectStore('markets');
+  const existing = new Map((await directory.getAll()).map(market => [market.key, market]));
+  for (const m of markets) {
+    const old = existing.get(m.key);
+    if (!old || old.venue !== m.venue || old.symbol !== m.symbol || old.baseAsset !== m.baseAsset
+      || old.quoteAsset !== m.quoteAsset || old.assetId !== m.assetId) await directory.put(m);
+  }
   await tx.done;
   if (now - lastPrune > HOUR) { await pruneFlowStorage(now); lastPrune = now; }
 }

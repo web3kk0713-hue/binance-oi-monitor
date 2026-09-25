@@ -29,9 +29,13 @@ const definitions: readonly Definition[] = [
   { symbol: 'TEST_CONFLICT', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 35 },
   { symbol: 'TEST_FUNDING_MISSING', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 62, missingFunding: true },
   { symbol: 'TEST_NO_OI', oi: .08, price: .02, missingFdv: false, futuresBuyShare: 68, spotBuyShare: 62, missingNativeOi: true },
+  { symbol: 'TEST_SENSITIVE', oi: .02, price: .003, missingFdv: false, futuresBuyShare: 57, spotBuyShare: 60 },
+  { symbol: 'TEST_SENSITIVE_SHORT', oi: .02, price: -.003, missingFdv: false, futuresBuyShare: 43, spotBuyShare: 40 },
+  { symbol: 'TEST_PENDING', oi: .12, price: .015, missingFdv: false, futuresBuyShare: 68 },
 ];
 
 let staleAt: number | null = null;
+let riskMark: string | null = null;
 let lastSnapshotAt = startedAt;
 const snapshotFrames = [startedAt];
 const observationTime = () => staleAt ?? Date.now();
@@ -171,6 +175,8 @@ const events = [
   syntheticEvent('TEST_FLAT', 'buy', 'synthetic-position-flat-buy'),
   syntheticEvent('TEST_LONG', 'buy', 'synthetic-direction-long-buy'),
   syntheticEvent('TEST_SHORT', 'sell', 'synthetic-direction-short-sell'),
+  syntheticEvent('TEST_SENSITIVE', 'buy', 'synthetic-direction-sensitive-buy'),
+  syntheticEvent('TEST_PENDING', 'buy', 'synthetic-direction-pending-buy'),
 ];
 
 function flowSnapshot(): FlowSnapshot {
@@ -186,6 +192,8 @@ function flowSnapshot(): FlowSnapshot {
       scope: `${syntheticLabel}；${definitions.length} 个合约与 ${markets.length - definitions.length} 个现货；TEST_UP 订单流故意过期。`,
     },
     rows, events,
+    marks: rows.filter(row => row.market.venue === 'futures').map(row => ({ marketKey: row.market.key,
+      markPrice: riskMark ?? String(row.price), sourceTime: at - 1000, receivedAt: at - 500, source: 'binance-mark-stream' as const })),
   };
 }
 
@@ -272,7 +280,10 @@ app.get('/acceptance', async (_request, reply) => reply.type('text/html').send(`
 <li>TEST_SHORT：5m OI +9%，价格 −2%，合约/现货主动买入 32%/38%；用于空方候选验收。</li>
 <li>TEST_CONFLICT：5m OI +8%，价格 +2%，合约买入 68% 但现货仅 35%；用于冲突观望验收。</li>
 <li>TEST_FUNDING_MISSING：同向买入与 OI/价格条件具备，但资金费率缺失；必须显示风险未知。</li>
-<li>TEST_NO_OI：估值页 OI 有变化，但单合约 5m OI 基线缺失；必须继续预热，不能借用聚合 OI 给方向。</li></ul>
+<li>TEST_NO_OI：估值页 OI 有变化，但单合约 5m OI 基线缺失；必须继续预热，不能借用聚合 OI 给方向。</li>
+<li>TEST_SENSITIVE：5m OI +2%，价格 +0.3%，合约/现货主动买入 57%/60%；标准档观望，敏感档可出现偏多候选。</li>
+<li>TEST_SENSITIVE_SHORT：5m OI +2%，价格 −0.3%，合约/现货主动买入 43%/40%；标准档观望，敏感档可出现偏空候选。</li>
+<li>TEST_PENDING：5m OI +12%，价格 +1.5%，合约主动买入 68%，没有现货样本；允许缺少现货时只能待确认，要求现货确认时必须观望。</li></ul>
 <p>除 TEST_FUNDING_MISSING 与故意过期样本外，费率 0.01%，8h。点击合成买入/卖出事件可验证回放与当前方向分离。所有数值均为验收样本，不是交易建议。</p>
 <button data-view="changes">打开变化监控合成验收</button><button data-view="flow">打开异常监控合成验收</button>
 <p>终端命令：stale（快照故意过期）、live（恢复新鲜）、status、stop。更改后点击页面刷新或等待轮询。</p>
@@ -302,5 +313,7 @@ input.on('line', line => {
   if (command === 'stale') { staleAt = Date.now() - 120_000; console.log('SYNTHETIC stale mode: the next snapshot is already 120s old.'); }
   if (command === 'live') { staleAt = null; console.log('SYNTHETIC live mode: fresh fixed-return frames restored.'); }
   if (command === 'status') console.log(JSON.stringify({ synthetic: true, mode: staleAt === null ? 'live' : 'stale', asOf: lastSnapshotAt, frameCount: snapshotFrames.length }));
+  if (/^mark [0-9]+(?:\.[0-9]+)?$/.test(command)) { riskMark = command.slice(5); console.log(`SYNTHETIC risk mark override: ${riskMark}`); }
+  if (command === 'mark reset') { riskMark = null; console.log('SYNTHETIC risk mark reset.'); }
 });
 process.on('SIGINT', () => void stop()); process.on('SIGTERM', () => void stop());

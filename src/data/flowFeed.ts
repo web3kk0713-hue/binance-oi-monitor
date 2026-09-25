@@ -1,6 +1,7 @@
 import { createFlowEngine } from '../shared/orderflow';
 import type { FlowEvent, FlowFeedOptions, FlowHistory, FlowMarket, FlowSnapshot, FlowUpdate } from '../shared/flowTypes';
 import type { Snapshot } from '../shared/types';
+import type { MarkObservation } from '../shared/positionTypes';
 import { createSourceClient, SourceError } from './http';
 import { UNIT_ALIASES } from './aliases';
 import { verifySpotMarket } from '../shared/liveMarket';
@@ -21,6 +22,7 @@ export function createFlowFeed(options: FlowFeedOptions) {
   const futuresConnections = new Set<Connection>();
   const backfilled = new Set<string>(), queued = new Map<string, number>(), errors = new Map<string, string>();
   const intervals = new Map<string, number>();
+  const marks = new Map<string, MarkObservation>();
   const timers: Array<ReturnType<typeof setInterval>> = [];
   let stopped = false, started = false, warming = 0, selecting = 0, selected: string | null = null;
   let stopSelection: (() => void) | null = null, latestOi: Snapshot | null = null, lastTick = now();
@@ -72,6 +74,17 @@ export function createFlowFeed(options: FlowFeedOptions) {
     const at = now();
     if (r?.e === 'aggTrade') { const trade = parseFlowTrade(raw, market, at); if (trade) engine.ingestTrade(trade); }
     if (r?.e === 'kline') { const candle = parseFlowCandle(raw, market, at); if (candle) engine.ingestCandle(candle); }
+  }
+  function consumeMark(raw: unknown, receivedAt: number) {
+    const r = record(raw), market = markets.get(`futures:${r?.s}`);
+    if (!market || market.venue !== 'futures' || r?.s !== market.symbol || r.e !== 'markPriceUpdate'
+      || !Number.isSafeInteger(receivedAt) || receivedAt <= 0 || !integer(r.E) || r.E <= 0 || r.E > receivedAt
+      || typeof r.p !== 'string' || r.p.length > 128 || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(r.p)
+      || !Number.isFinite(Number(r.p)) || Number(r.p) <= 0) return;
+    const previous = marks.get(market.key);
+    // Preserve the earliest receipt for the same source observation; never rewind.
+    if (previous && previous.sourceTime >= r.E) return;
+    marks.set(market.key, { marketKey: market.key, markPrice: r.p, sourceTime: r.E, receivedAt, source: 'binance-mark-stream' });
   }
   async function warmQueue() {
     if (stopped || warming >= 2) return;
@@ -173,15 +186,21 @@ export function createFlowFeed(options: FlowFeedOptions) {
       if (quantity !== null && timestamp != null && receivedAt != null && timestamp <= now() && receivedAt <= now()) engine.ingestOi({ marketKey: key, quantity, timestamp, receivedAt });
     }
   }
-  function flush(): Promise<void> {
+  function flush(publish = true): Promise<void> {
     if (flushPromise) return flushPromise;
+    const previousStorageError = errors.get('storage');
     flushPromise = Promise.resolve().then(async () => {
       try {
         const update = pendingWrite ?? engine.drainUpdates(); pendingWrite = update;
         if (update.candles.length || update.events.length || update.depth.length || update.oi.length) await options.onUpdate?.(update);
         pendingWrite = null; errors.delete('storage');
       } catch (e) { report('storage', `历史写入失败：${e instanceof Error ? e.message : e}`); }
-    }).finally(() => { flushPromise = null; options.onChange?.(); });
+    }).finally(() => {
+      flushPromise = null;
+      // Heartbeats already publish live data. Publish again only for an actual
+      // persistence-state transition, or an explicit final shutdown flush.
+      if (publish || errors.get('storage') !== previousStorageError) options.onChange?.();
+    });
     return flushPromise;
   }
   async function fundingIntervals() {
@@ -204,7 +223,7 @@ export function createFlowFeed(options: FlowFeedOptions) {
       const foundKeys = new Set(found.map(m => m.key)), oldKeys = new Set([...markets.values()].filter(m => m.venue === 'futures').map(m => m.key));
       const changed = foundKeys.size !== oldKeys.size || [...foundKeys].some(k => !oldKeys.has(k));
       if (changed) { futuresConnections.forEach(c => c.stop()); futuresConnections.clear(); }
-      for (const [key, m] of markets) if (m.venue === 'futures' && !foundKeys.has(key)) { markets.delete(key); queued.delete(key); backfilled.delete(key); }
+      for (const [key, m] of markets) if (m.venue === 'futures' && !foundKeys.has(key)) { markets.delete(key); marks.delete(key); queued.delete(key); backfilled.delete(key); }
       found.forEach(m => markets.set(m.key, m)); syncMarkets();
       if (changed) { openMarkets(found); found.forEach(m => enqueue(m.key)); }
       if (selected && !markets.has(selected)) { selected = found[0].key; void installSelection(selected); }
@@ -226,19 +245,25 @@ export function createFlowFeed(options: FlowFeedOptions) {
       openMarkets(found);
       connect('wss://fstream.binance.com/market/ws/!markPrice@arr@1s', [], raw => {
         if (!Array.isArray(raw)) return;
-        for (const value of raw) { const r = record(value), m = markets.get(`futures:${r?.s}`); if (m) { const q = parseFlowQuote(value, m, now(), intervals.get(m.symbol) ?? null); if (q) engine.ingestQuote(q); } }
-      });
+        const receivedAt = now();
+        for (const value of raw) {
+          consumeMark(value, receivedAt);
+          const r = record(value), m = markets.get(`futures:${r?.s}`);
+          if (m) { const q = parseFlowQuote(value, m, receivedAt, intervals.get(m.symbol) ?? null); if (q) engine.ingestQuote(q); }
+        }
+      }, undefined, () => marks.clear());
       found.forEach(m => enqueue(m.key));
       if (latestOi) updateSnapshot(latestOi);
       selected = resolveSelection(selected ?? found[0].key); void installSelection(selected); void fundingIntervals();
       timers.push(setInterval(() => void warmQueue(), 500));
-      timers.push(setInterval(() => void flush(), 5000));
       timers.push(setInterval(() => void fundingIntervals(), 3_600_000));
       timers.push(setInterval(() => void refreshUniverse(), 3_600_000));
       timers.push(setInterval(() => {
         const at = now(), paused = at - lastTick > 15_000; lastTick = at;
         for (const c of connections) if (paused || at - c.lastMessage > 30_000) c.restart();
-        options.onChange?.();
+        // One immediate normal publication per cycle; never block market/freshness
+        // updates on storage. flush separately reports persistence transitions.
+        void flush(false); options.onChange?.();
       }, 5000));
       options.onChange?.();
     } catch (e) {
@@ -249,7 +274,9 @@ export function createFlowFeed(options: FlowFeedOptions) {
   }
   function snapshot(): FlowSnapshot {
     const at = now(), rows = engine.metrics(at);
-    return { schemaVersion: 1, rows, events: engine.events(), status: { mode: options.mode, startedAt, asOf: at,
+    return { schemaVersion: 1, rows, events: engine.events(), marks: [...marks.values()]
+      .filter(mark => markets.has(mark.marketKey) && mark.sourceTime <= at && mark.receivedAt <= at).map(mark => ({ ...mark })),
+      status: { mode: options.mode, startedAt, asOf: at,
       connectedStreams: [...connections].filter(c => c.opened).length, totalStreams: connections.size,
       markets: rows.length, readyMarkets: rows.filter(r => r.status === 'live').length, warmingMarkets: rows.filter(r => r.status === 'warming').length,
       staleMarkets: rows.filter(r => r.status === 'stale' || r.status === 'disconnected').length, backfilledMarkets: backfilled.size,
@@ -265,5 +292,7 @@ export function createFlowFeed(options: FlowFeedOptions) {
     stopPromise = (async () => { await flush(); await flush(); })();
     return stopPromise;
   }
-  return { start, stop, updateSnapshot, selectMarket, snapshot, history, hydrateEvents: (events: FlowEvent[]) => engine.hydrateEvents(events) };
+  return { start, stop, updateSnapshot, selectMarket, snapshot, history,
+    markets: (): FlowMarket[] => [...markets.values()].map(market => ({ ...market })),
+    hydrateEvents: (events: FlowEvent[]) => engine.hydrateEvents(events) };
 }

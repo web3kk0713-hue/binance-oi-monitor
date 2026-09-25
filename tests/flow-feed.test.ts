@@ -14,7 +14,7 @@ class Socket {
 }
 const at = 1_800_000_000_000;
 const row = { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', underlyingType: 'COIN' };
-function harness(onUpdate?: (u: FlowUpdate) => void | Promise<void>) {
+function harness(onUpdate?: (u: FlowUpdate) => void | Promise<void>, onChange?: () => void) {
   vi.useFakeTimers(); vi.setSystemTime(at); const sockets: Socket[] = [];
   const fetcher = vi.fn(async (url: string | URL | Request) => {
     const u = new URL(String(url));
@@ -25,7 +25,7 @@ function harness(onUpdate?: (u: FlowUpdate) => void | Promise<void>) {
     if (u.pathname.endsWith('klines')) return Response.json([[at - 60_000, '100', '101', '99', '100', '100', at - 1, '10000', 20, '50', '5000']]);
     throw new Error('Unexpected URL');
   }) as unknown as typeof fetch;
-  const feed = createFlowFeed({ mode: 'direct', fetcher, onUpdate, socketFactory: url => { const s = new Socket(url); sockets.push(s); return s as unknown as WebSocket; } });
+  const feed = createFlowFeed({ mode: 'direct', fetcher, onUpdate, onChange, socketFactory: url => { const s = new Socket(url); sockets.push(s); return s as unknown as WebSocket; } });
   return { feed, sockets, fetcher };
 }
 afterEach(() => vi.useRealTimers());
@@ -78,5 +78,74 @@ describe('browser/server shared orderflow feed', () => {
     const { feed, sockets, fetcher } = harness(); feed.selectMarket('spot:BTCUSDT'); await feed.start(); await vi.advanceTimersByTimeAsync(0);
     expect(vi.mocked(fetcher).mock.calls.some(([url]) => String(url).includes('/api/v3/exchangeInfo?symbol=BTCUSDT'))).toBe(true);
     expect(sockets.filter(s => s.url.includes('stream.binance.com:9443'))).toHaveLength(1); await feed.stop();
+  });
+  it('publishes once per normal 5s cycle instead of once for flush and once for heartbeat', async () => {
+    const onChange = vi.fn(), { feed, sockets } = harness(undefined, onChange);
+    await feed.start(); await vi.advanceTimersByTimeAsync(0); sockets.forEach(s => s.open());
+    onChange.mockClear();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(onChange).toHaveBeenCalledTimes(3);
+    await feed.stop();
+  });
+  it('publishes immediate freshness on every cycle even while the first disk write is blocked', async () => {
+    let release: (() => void) | undefined;
+    const onChange = vi.fn(), { feed, sockets } = harness(() => new Promise<void>(resolve => { release = resolve; }), onChange);
+    await feed.start(); await vi.advanceTimersByTimeAsync(0); sockets.forEach(s => s.open()); onChange.mockClear();
+    await vi.advanceTimersByTimeAsync(5000); expect(onChange).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000); expect(onChange).toHaveBeenCalledTimes(2);
+    release!(); await vi.advanceTimersByTimeAsync(0); expect(onChange).toHaveBeenCalledTimes(2);
+    await feed.stop();
+  });
+  it('returns an isolated market directory without constructing a metrics snapshot', async () => {
+    const { feed } = harness(); await feed.start(); await vi.advanceTimersByTimeAsync(0);
+    const snapshot = vi.spyOn(feed, 'snapshot');
+    const directory = feed.markets(); expect(directory).toHaveLength(2);
+    directory[0].symbol = 'MUTATED'; directory.pop();
+    expect(feed.markets()[0].symbol).toBe('BTCUSDT'); expect(feed.markets()).toHaveLength(2);
+    expect(snapshot).not.toHaveBeenCalled(); await feed.stop();
+  });
+  it('retains raw marks independently of missing or invalid funding and settlement metadata', async () => {
+    const { feed, sockets } = harness(); await feed.start(); await vi.advanceTimersByTimeAsync(0); sockets.forEach(s => s.open());
+    const socket = sockets.find(s => s.url.includes('!markPrice'))!;
+    socket.message([{ e: 'markPriceUpdate', s: 'BTCUSDT', E: at, p: '100.123456789012345678901234', i: 'bad', r: null, T: at - 1 }]);
+    const snapshot = feed.snapshot();
+    expect(snapshot.rows.find(row => row.market.key === 'futures:BTCUSDT')!.funding).toBeNull();
+    expect(snapshot.marks).toEqual([{ marketKey: 'futures:BTCUSDT', markPrice: '100.123456789012345678901234',
+      sourceTime: at, receivedAt: at, source: 'binance-mark-stream' }]);
+    snapshot.marks![0].markPrice = '999'; expect(feed.snapshot().marks![0].markPrice).toBe('100.123456789012345678901234');
+    await feed.stop();
+  });
+  it('rejects wrong identity, event type, invalid source time and nondecimal raw marks', async () => {
+    const { feed, sockets } = harness(); await feed.start(); await vi.advanceTimersByTimeAsync(0); sockets.forEach(s => s.open());
+    const socket = sockets.find(s => s.url.includes('!markPrice'))!;
+    const good = { e: 'markPriceUpdate', s: 'BTCUSDT', E: at, p: '100.00' };
+    const invalid = [{ s: 'ETHUSDT' }, { s: 'btcusdt' }, { e: 'aggTrade' }, { E: at + 1 }, { E: String(at) },
+      { E: 0 }, { E: -1 }, { E: at + .5 }, { p: 100 }, { p: '0' }, { p: '-1' }, { p: 'Infinity' },
+      { p: '0x10' }, { p: '1e3' }, { p: '' }, { p: ' 1' }, { p: '01' }, { p: '1'.repeat(129) }];
+    for (const value of invalid) socket.message([{ ...good, ...value }]);
+    expect(feed.snapshot().marks).toEqual([]);
+    sockets.find(s => s.url.includes('market/stream?streams='))!.message({ e: 'aggTrade', s: 'BTCUSDT', E: at, T: at, a: 1, p: '100', q: '2', m: false });
+    expect(feed.snapshot().marks).toEqual([]);
+    socket.message([good]); expect(feed.snapshot().marks).toHaveLength(1); await feed.stop();
+  });
+  it('never rewinds mark source time and preserves earliest receipt for duplicate observations', async () => {
+    const { feed, sockets } = harness(); await feed.start(); await vi.advanceTimersByTimeAsync(0); sockets.forEach(s => s.open());
+    const socket = sockets.find(s => s.url.includes('!markPrice'))!;
+    socket.message([{ e: 'markPriceUpdate', s: 'BTCUSDT', E: at, p: '100' }]);
+    vi.setSystemTime(at + 10);
+    socket.message([{ e: 'markPriceUpdate', s: 'BTCUSDT', E: at, p: '101' }, { e: 'markPriceUpdate', s: 'BTCUSDT', E: at - 1, p: '99' }]);
+    expect(feed.snapshot().marks![0]).toMatchObject({ markPrice: '100', receivedAt: at });
+    socket.message([{ e: 'markPriceUpdate', s: 'BTCUSDT', E: at + 1, p: '102' }]);
+    expect(feed.snapshot().marks![0]).toMatchObject({ markPrice: '102', sourceTime: at + 1, receivedAt: at + 10 }); await feed.stop();
+  });
+  it('clears marks immediately when the mark stream disconnects or the feed stops', async () => {
+    const { feed, sockets } = harness(); await feed.start(); await vi.advanceTimersByTimeAsync(0); sockets.forEach(s => s.open());
+    const socket = sockets.find(s => s.url.includes('!markPrice'))!;
+    socket.message([{ e: 'markPriceUpdate', s: 'BTCUSDT', E: at, p: '100' }]);
+    expect(feed.snapshot().marks).toHaveLength(1); socket.onclose?.(); expect(feed.snapshot().marks).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = sockets.filter(s => s.url.includes('!markPrice')).at(-1)!; next.open();
+    next.message([{ e: 'markPriceUpdate', s: 'BTCUSDT', E: at + 1000, p: '101' }]);
+    expect(feed.snapshot().marks).toHaveLength(1); await feed.stop(); expect(feed.snapshot().marks).toEqual([]);
   });
 });

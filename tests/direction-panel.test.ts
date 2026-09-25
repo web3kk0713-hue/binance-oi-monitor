@@ -2,12 +2,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DirectionAssessment } from '../src/shared/direction';
+import { DEFAULT_DIRECTION_CONFIG, DIRECTION_PRESETS } from '../src/shared/directionConfig';
 import { DirectionBadge, DirectionPanel } from '../src/web/DirectionPanel';
 
-const result: DirectionAssessment = { bias: 'long', label: '偏多候选', confirmation: '待现货确认 · 不宜直接开仓',
+const result: DirectionAssessment = { bias: 'long', quality: 'valid', label: '偏多候选', confirmation: '待现货确认 · 不宜直接开仓',
   reason: '同合约5分钟增仓上涨', evidence: ['OI +8% · 价格 +2%'], risks: ['缺少现货确认'],
   invalidation: '数据过期即退回观望', marketKey: 'futures:TESTUSDT', symbol: 'TESTUSDT',
-  asOf: Date.UTC(2026, 8, 25, 1), windowStart: Date.UTC(2026, 8, 25, 0, 55), windowEnd: Date.UTC(2026, 8, 25, 1), ruleVersion: 'direction-v1' };
+  asOf: Date.UTC(2026, 8, 25, 1), windowStart: Date.UTC(2026, 8, 25, 0, 55), windowEnd: Date.UTC(2026, 8, 25, 1), ruleVersion: 'direction-v2', config: DEFAULT_DIRECTION_CONFIG };
 
 describe('visible directional advice', () => {
   it('keeps direction, missing confirmation, reason and withdrawal visible before disclosure', () => {
@@ -31,5 +32,13 @@ describe('visible directional advice', () => {
     const html = renderToStaticMarkup(createElement(DirectionPanel, { value: result }));
     expect(html).toContain('不拼接自定义变化窗口');
     expect(html).toContain('不默认 8 小时');
+  });
+  it('renders the active thresholds, not stale standard-rule text', () => {
+    const html = renderToStaticMarkup(createElement(DirectionPanel, { value: { ...result, config: DIRECTION_PRESETS.sensitive } }));
+    expect(html).toContain('灵敏');
+    expect(html).toContain('≥ +1%');
+    expect(html).toContain('≥55%');
+    expect(html).toContain('≤45%');
+    expect(html).not.toContain('≥ +5%');
   });
 });

@@ -6,7 +6,8 @@ let registration: Promise<ServiceWorkerRegistration> | undefined;
 export function registerNotifications(): Promise<ServiceWorkerRegistration> {
   if (!('serviceWorker' in navigator)) return Promise.reject(new Error('此浏览器不支持系统推送，请使用 Chrome 或 Edge。'));
   // A relative URL keeps service workers scoped to this GitHub Pages repository.
-  return registration ??= navigator.serviceWorker.register(new URL('sw.js', document.baseURI).href, { scope: './' }).then(() => navigator.serviceWorker.ready);
+  return registration ??= navigator.serviceWorker.register(new URL('sw.js', document.baseURI).href, { scope: './' })
+    .then(() => navigator.serviceWorker.ready).catch(error => { registration = undefined; throw error; });
 }
 export function notificationSupport(): boolean { return 'Notification' in window && 'serviceWorker' in navigator && window.isSecureContext; }
 export async function requestNotifications(): Promise<boolean> {

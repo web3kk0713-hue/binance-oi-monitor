@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessDirection, DIRECTION_RULES } from '../src/shared/direction';
+import { DEFAULT_DIRECTION_CONFIG, DIRECTION_PRESETS, type DirectionConfig } from '../src/shared/directionConfig';
 import type { FlowMetrics, FlowSnapshot } from '../src/shared/flowTypes';
 
 const NOW = Date.UTC(2026, 8, 25, 12, 0, 5);
@@ -31,7 +32,7 @@ const bearishSpot = () => spot({ priceChange5m: -1, buyShare5m: 45, delta5m: -10
 describe('experimental fixed-5m direction contract', () => {
   it('produces symmetrical candidates, with explicit missing spot confirmation', () => {
     expect(assess()).toMatchObject({ bias: 'long', label: '偏多候选', confirmation: '待现货确认 · 不宜直接开仓',
-      marketKey: 'futures:BTCUSDT', symbol: 'BTCUSDT', asOf: NOW, windowStart: END - 300_000, windowEnd: END, ruleVersion: 'direction-v1' });
+      marketKey: 'futures:BTCUSDT', symbol: 'BTCUSDT', asOf: NOW, windowStart: END - 300_000, windowEnd: END, ruleVersion: 'direction-v2', config: DEFAULT_DIRECTION_CONFIG });
     expect(assess(bearish)).toMatchObject({ bias: 'short', label: '偏空候选', confirmation: '待现货确认 · 不宜直接开仓' });
     expect(assess().evidence.join(' ')).toContain('OI +5.00%');
     expect(assess().risks.join(' ')).toContain('未回测');
@@ -206,5 +207,183 @@ describe('funding is disclosed risk, not another direction vote', () => {
     const data = snapshot([spot(), row()]); const before = structuredClone(data);
     assessDirection(data, ASSET, NOW);
     expect(data).toEqual(before);
+  });
+});
+
+describe('configurable direction-v2 thresholds', () => {
+  const configured = (config: DirectionConfig, changes: Partial<FlowMetrics> = {}, spotRow?: FlowMetrics) =>
+    assessDirection(snapshot([row(changes), ...(spotRow ? [spotRow] : [])]), ASSET, NOW, undefined, config);
+  const loose: DirectionConfig = { oiPct: 0.1, pricePct: 0.05, flowSharePct: 51, requireSpot: false };
+  const looseInputs = { oiChange5m: 0.1, priceChange5m: 0.051, buyShare5m: 51, delta5m: 2000 };
+
+  it('sensitive accepts the same smaller move that standard correctly waits on, symmetrically', () => {
+    const smaller = { oiChange5m: 1, priceChange5m: 0.3, buyShare5m: 55, delta5m: 10_000 };
+    const smallerShort = { ...smaller, priceChange5m: -0.3, buyShare5m: 45, delta5m: -10_000 };
+    expect(configured(DIRECTION_PRESETS.sensitive, smaller).bias).toBe('long');
+    expect(configured(DIRECTION_PRESETS.standard, smaller).bias).toBe('wait');
+    expect(configured(DIRECTION_PRESETS.sensitive, smallerShort).bias).toBe('short');
+    expect(configured(DIRECTION_PRESETS.standard, smallerShort).bias).toBe('wait');
+    expect(assessDirection(snapshot(), ASSET, NOW, undefined, undefined)).toEqual(assess());
+  });
+
+  it('strict requires full same-direction spot confirmation, not just stronger futures', () => {
+    const stronger = { oiChange5m: 10, priceChange5m: 1.1, buyShare5m: 65, delta5m: 30_000 };
+    const short = { ...stronger, priceChange5m: -1.1, buyShare5m: 35, delta5m: -30_000 };
+    expect(configured(DIRECTION_PRESETS.strict, stronger)).toMatchObject({ bias: 'wait', confirmation: '等待现货同向' });
+    expect(configured(DIRECTION_PRESETS.strict, stronger, spot())).toMatchObject({ bias: 'long', confirmation: '现货同向 · 仍需入场确认' });
+    expect(configured(DIRECTION_PRESETS.strict, short, bearishSpot())).toMatchObject({ bias: 'short', confirmation: '现货同向 · 仍需入场确认' });
+    for (const item of [spot({ priceChange5m: 0 }), spot({ delta5m: null }), spot({ buyShare5m: 50, delta5m: 0 }), bearishSpot()])
+      expect(configured(DIRECTION_PRESETS.strict, stronger, item)).toMatchObject({ bias: 'wait', confirmation: '等待现货同向' });
+    expect(configured(DIRECTION_PRESETS.strict, stronger, spot()).invalidation).toContain('现货同向确认不再成立');
+  });
+
+  it('uses exact unrounded decimal inclusive OI/flow and exclusive price thresholds', () => {
+    const custom = { oiPct: 1.1, pricePct: 0.2, flowSharePct: 55.2, requireSpot: false };
+    const exact = { oiChange5m: 1.1, priceChange5m: 0.20000000000000004, buyShare5m: 55.2, delta5m: 10_400 };
+    expect(configured(custom, exact).bias).toBe('long');
+    expect(configured(custom, { ...exact, oiChange5m: 1.0999999999999999 }).bias).toBe('wait');
+    expect(configured(custom, { ...exact, priceChange5m: 0.2 }).bias).toBe('wait');
+    expect(configured(custom, { ...exact, buyShare5m: 55.19999999999999 }).bias).toBe('wait');
+    const short = { ...exact, priceChange5m: -0.20000000000000004, buyShare5m: 44.8, delta5m: -10_400 };
+    expect(configured(custom, short).bias).toBe('short');
+    expect(configured(custom, { ...short, buyShare5m: 44.800000000000004 }).bias).toBe('wait');
+    expect(configured(custom, { ...short, priceChange5m: -0.2 }).bias).toBe('wait');
+    const wider = { ...custom, flowSharePct: 65.1 };
+    expect(configured(wider, { ...short, buyShare5m: 34.9 }).bias).toBe('short');
+    expect(configured(wider, { ...short, buyShare5m: 34.900000000000006 }).bias).toBe('wait');
+  });
+
+  it('uses the active thresholds in every threshold explanation, including the symmetric short complement', () => {
+    const custom = { oiPct: 1.25, pricePct: 0.3, flowSharePct: 55.2, requireSpot: false };
+    const oiWait = configured(custom, { oiChange5m: 1 });
+    const priceWait = configured(custom, { priceChange5m: 0.3 });
+    const flowWait = configured(custom, { buyShare5m: 55.1, delta5m: 10_200 });
+    const long = configured(custom);
+    const short = configured(custom, bearish);
+    expect(oiWait.reason).toContain('+1.25%');
+    expect(priceWait.reason).toContain('±0.3%');
+    expect(flowWait.reason).toContain('≥55.2%');
+    expect(flowWait.reason).toContain('≤44.8%');
+    expect(long.reason).toContain('OI增幅≥1.25%');
+    expect(long.reason).toContain('涨幅>0.3%');
+    expect(long.invalidation).toContain('低于55.2%');
+    expect(short.reason).toContain('跌幅>0.3%');
+    expect(short.reason).toContain('≤44.8%');
+    expect(short.invalidation).toContain('高于44.8%');
+    for (const result of [oiWait, priceWait, flowWait, long, short])
+      expect(`${result.reason} ${result.invalidation}`).not.toMatch(/\+5%|低于5%|0\.5%|60%|40%/);
+  });
+
+  it('returns an independent immutable exact configuration receipt even when waiting', () => {
+    const config: DirectionConfig = { ...DIRECTION_PRESETS.sensitive };
+    const result = configured(config);
+    const waiting = assessDirection(null, ASSET, NOW, undefined, config);
+    expect(result.config).toEqual(config);
+    expect(result.config).not.toBe(config);
+    expect(Object.isFrozen(result.config)).toBe(true);
+    expect(waiting.config).toEqual(config);
+    expect(Object.isFrozen(waiting.config)).toBe(true);
+    config.oiPct = 25;
+    expect(result.config?.oiPct).toBe(1);
+    expect(waiting.config?.oiPct).toBe(1);
+    expect(result.ruleVersion).toBe('direction-v2');
+  });
+
+  it.each([null, {}, [], 'sensitive', 1,
+    { ...DEFAULT_DIRECTION_CONFIG, oiPct: 0 },
+    { ...DEFAULT_DIRECTION_CONFIG, oiPct: undefined },
+    { ...DEFAULT_DIRECTION_CONFIG, pricePct: null },
+    { ...DEFAULT_DIRECTION_CONFIG, pricePct: Infinity },
+    { ...DEFAULT_DIRECTION_CONFIG, flowSharePct: NaN },
+    { ...DEFAULT_DIRECTION_CONFIG, flowSharePct: 90.1 },
+    { ...DEFAULT_DIRECTION_CONFIG, requireSpot: 'false' },
+    { ...DEFAULT_DIRECTION_CONFIG, requireSpot: undefined },
+  ])('waits on invalid supplied config without acting on fallback defaults %j', config => {
+    const result = configured(config as DirectionConfig);
+    expect(result).toMatchObject({ bias: 'wait', config: null, ruleVersion: 'direction-v2' });
+    expect(result.reason).toContain('方向参数无效');
+  });
+
+  it('never relaxes required data quality gates under the lowest permitted thresholds', () => {
+    expect(configured(loose, looseInputs).bias).toBe('long');
+    const badRows: Partial<FlowMetrics>[] = [
+      { status: 'stale' }, { status: 'warming' }, { status: 'disconnected' },
+      { asOf: NOW + 1 }, { asOf: NOW - 30_001 }, { asOf: NOW - 5000 },
+      { lastCandleAt: NOW + 1 }, { lastCandleAt: NOW - 90_001 },
+      { oiChange5m: null }, { oiChange5m: NaN }, { oiChange5m: -100.1 },
+      { priceChange5m: null }, { priceChange5m: -100.1 },
+      { buyShare5m: NaN }, { buyShare5m: 100.1 }, { delta5m: null }, { delta5m: -1 },
+      { market: { ...row().market, assetId: 'binance:ETH' } },
+      { market: { ...row().market, venue: 'spot' } },
+      { market: { ...row().market, key: 'spot:BTCUSDT' } },
+    ];
+    for (const bad of badRows) expect(configured(loose, { ...looseInputs, ...bad }).bias, JSON.stringify(bad)).toBe('wait');
+    expect(assessDirection(snapshot([row(looseInputs)], NOW + 1), ASSET, NOW, undefined, loose).bias).toBe('wait');
+    expect(assessDirection(snapshot([row(looseInputs)]), ASSET, NOW, 'futures:MISSING', loose).bias).toBe('wait');
+  });
+
+  it('keeps spot thresholds, conflicts, freshness, identity, quote and window gates fixed at minimum settings', () => {
+    const required = { ...loose, requireSpot: true };
+    expect(configured(loose, looseInputs, bearishSpot()).bias).toBe('wait');
+    expect(configured(loose, looseInputs, spot({ buyShare5m: 54, delta5m: 8000 })).confirmation).toContain('待现货确认');
+    expect(configured(required, looseInputs, spot({ buyShare5m: 54, delta5m: 8000 })).bias).toBe('wait');
+    const unavailableSpot = [
+      spot({ status: 'stale' }), spot({ asOf: NOW + 1 }), spot({ lastCandleAt: NOW - 90_001 }),
+      spot({ asOf: NOW - 10_000, lastCandleAt: NOW - 11_000 }),
+      spot({ market: { ...spot().market, assetId: 'binance:ETH' } }),
+      spot({ market: { ...spot().market, key: 'spot:BTCUSDC', symbol: 'BTCUSDC', quoteAsset: 'USDC' } }),
+    ];
+    for (const item of unavailableSpot) {
+      expect(configured(loose, looseInputs, item).confirmation).toContain('待现货确认');
+      expect(configured(required, looseInputs, item)).toMatchObject({ bias: 'wait', confirmation: '等待现货同向' });
+    }
+    const data = snapshot([row(looseInputs), spot()]);
+    expect(assessDirection(data, ASSET, NOW, 'spot:MISSING', required)).toMatchObject({ bias: 'wait', confirmation: '等待现货同向' });
+  });
+});
+
+describe('structured quality for position-risk consumers', () => {
+  const strong = { oiChange5m: 11, priceChange5m: 2, buyShare5m: 70, delta5m: 40_000 };
+  it.each([{ oiChange5m: 0 }, { priceChange5m: 0 }, { buyShare5m: 60 }])
+    ('does not misclassify strict missing spot as a weak signal on earlier failed condition %j', change => {
+      const futures = row({ ...strong, ...change });
+      const badSpots = [null, spot({ status: 'stale' }), spot({ status: 'warming' }),
+        spot({ asOf: NOW + 1 }), spot({ lastCandleAt: NOW - 90_001 }),
+        spot({ asOf: NOW - 10_000, lastCandleAt: NOW - 11_000 }),
+        spot({ priceChange5m: null }), spot({ delta5m: null }), spot({ delta5m: -1 }),
+        spot({ market: { ...spot().market, assetId: 'binance:OTHER' } }),
+        spot({ market: { ...spot().market, key: 'spot:BTCUSDC', symbol: 'BTCUSDC', quoteAsset: 'USDC' } })];
+      const withCompleteSpot = assessDirection(snapshot([futures, spot()]), ASSET, NOW, undefined, DIRECTION_PRESETS.strict);
+      expect(withCompleteSpot).toMatchObject({ bias: 'wait', quality: 'valid' });
+      for (const item of badSpots) {
+        const result = assessDirection(snapshot([futures, ...(item ? [item] : [])]), ASSET, NOW, undefined, DIRECTION_PRESETS.strict);
+        expect(result, JSON.stringify(item)).toMatchObject({ quality: 'unavailable', bias: 'wait',
+          reason: withCompleteSpot.reason, confirmation: withCompleteSpot.confirmation });
+      }
+      for (const selected of ['spot:BTCUSDC', 'spot:MISSING']) {
+        expect(assessDirection(snapshot([futures, spot()]), ASSET, NOW, selected, DIRECTION_PRESETS.strict))
+          .toMatchObject({ quality: 'unavailable', bias: 'wait', reason: withCompleteSpot.reason });
+      }
+      expect(assessDirection(snapshot([futures, spot({ buyShare5m: 50, delta5m: 0, priceChange5m: 0 })]), ASSET, NOW, undefined, DIRECTION_PRESETS.strict))
+        .toMatchObject({ quality: 'valid', bias: 'wait' });
+    });
+  it.each([
+    spot({ priceChange5m: -1, buyShare5m: null, delta5m: null }),
+    spot({ priceChange5m: null, buyShare5m: 40, delta5m: -20_000 }),
+    bearishSpot(),
+  ])('keeps a verified strict spot contradiction valid even with another independent metric missing', item => {
+    expect(assessDirection(snapshot([row(strong), item]), ASSET, NOW, undefined, DIRECTION_PRESETS.strict))
+      .toMatchObject({ quality: 'valid', bias: 'wait', reason: '现货主动成交或价格明确反向，撤销合约方向候选' });
+  });
+  it('distinguishes true failed conditions from missing, stale or inconsistent evidence without changing bias', () => {
+    expect(assess()).toMatchObject({ quality: 'valid', bias: 'long' });
+    expect(assess({ oiChange5m: 0 })).toMatchObject({ quality: 'valid', bias: 'wait' });
+    expect(assess({ priceChange5m: 0 })).toMatchObject({ quality: 'valid', bias: 'wait' });
+    for (const input of [{ oiChange5m: null }, { status: 'stale' as const }, { delta5m: -1 }])
+      expect(assess(input)).toMatchObject({ quality: 'unavailable', bias: 'wait' });
+    const data = snapshot([row({ oiChange5m: 11, priceChange5m: 2, buyShare5m: 70 })]);
+    expect(assessDirection(data, ASSET, NOW, undefined, DIRECTION_PRESETS.strict)).toMatchObject({ quality: 'unavailable', bias: 'wait' });
+    expect(assessDirection(snapshot([...data.rows, spot({ buyShare5m: 50, delta5m: 0 })]), ASSET, NOW, undefined, DIRECTION_PRESETS.strict))
+      .toMatchObject({ quality: 'valid', bias: 'wait' });
   });
 });

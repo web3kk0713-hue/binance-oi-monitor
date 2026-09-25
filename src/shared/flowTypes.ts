@@ -1,3 +1,5 @@
+import type { MarkObservation } from './positionTypes';
+
 /** Public order-flow contracts. Prices and amounts retain the market's quote currency (NOT silently USD). */
 export type FlowVenue = 'futures' | 'spot';
 export interface FlowMarket { key: string; venue: FlowVenue; symbol: string; baseAsset: string; quoteAsset: string; assetId: string; }
@@ -44,7 +46,11 @@ export interface FlowStatus {
   markets: number; readyMarkets: number; warmingMarkets: number; staleMarkets: number;
   backfilledMarkets: number; errors: string[]; retentionDays: number; scope: string;
 }
-export interface FlowSnapshot { schemaVersion: 1; status: FlowStatus; rows: FlowMetrics[]; events: FlowEvent[]; }
+export interface FlowSnapshot {
+  schemaVersion: 1; status: FlowStatus; rows: FlowMetrics[]; events: FlowEvent[];
+  /** Independent raw mark-price observations, never inferred from trades or gated by funding metadata. */
+  marks?: MarkObservation[];
+}
 export interface FlowHistory { market: FlowMarket | null; candles: FlowCandle[]; events: FlowEvent[]; depth: FlowDepth[]; oi: FlowOi[]; from: number; to: number; }
 export interface FlowUpdate { candles: FlowCandle[]; events: FlowEvent[]; depth: FlowDepth[]; oi: FlowOi[]; }
 export interface FlowFeedOptions {

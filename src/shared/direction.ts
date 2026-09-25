@@ -1,10 +1,11 @@
+import Decimal from 'decimal.js';
+import { DEFAULT_DIRECTION_CONFIG, directionSellThreshold, isDirectionConfig, type DirectionConfig } from './directionConfig';
 import { selectFlowContext, type FlowContextRow } from './flowContext';
 import type { FlowSnapshot } from './flowTypes';
 
 /** Transparent experimental filters, not calibrated probabilities or an execution strategy. */
 export const DIRECTION_RULES = Object.freeze({
-  version: 'direction-v1' as const, windowMinutes: 5, oiPct: 5,
-  pricePct: 0.5, futuresBuyPct: 60, futuresSellPct: 40, spotBuyPct: 55, spotSellPct: 45,
+  version: 'direction-v2' as const, windowMinutes: 5, spotBuyPct: 55, spotSellPct: 45,
 });
 
 export interface DirectionAssessment {
@@ -20,9 +21,13 @@ export interface DirectionAssessment {
   asOf: number | null;
   windowStart: number | null;
   windowEnd: number | null;
-  ruleVersion: 'direction-v1';
+  ruleVersion: 'direction-v2';
+  config: DirectionConfig | null;
+  /** Whether the directional conclusion has sufficient, internally consistent inputs. */
+  quality: 'valid' | 'unavailable';
 }
 
+const ExactDecimal = Decimal.clone({ precision: 80 });
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const signedPct = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 const sameSide = (share: number, delta: number) => share > 50 ? delta > 0 : share < 50 ? delta < 0 : delta === 0;
@@ -39,15 +44,24 @@ const hasTrade = (row: FlowContextRow | null): row is FlowContextRow & {
  * funding is separately disclosed risk, never an independent directional vote.
  */
 export function assessDirection(snapshot: FlowSnapshot | null, assetId: string | undefined,
-  now: number, preferredMarketKey?: string | null): DirectionAssessment {
+  now: number, preferredMarketKey?: string | null, config: DirectionConfig = DEFAULT_DIRECTION_CONFIG): DirectionAssessment {
   const result: DirectionAssessment = {
     bias: 'wait', label: '观望 · 暂不交易', confirmation: '方向条件未齐',
     reason: '', evidence: [],
     risks: ['试验规则，未回测收益或胜率', '未评估盘口深度、滑点、手续费及可执行性'],
     invalidation: '必需条件缺失、冲突或数据过期时维持观望；这不是止损或自动平仓规则',
     marketKey: null, symbol: null, asOf: null, windowStart: null, windowEnd: null,
-    ruleVersion: DIRECTION_RULES.version,
+    ruleVersion: DIRECTION_RULES.version, config: null, quality: 'unavailable',
   };
+  if (!isDirectionConfig(config)) {
+    result.reason = '方向参数无效，请检查 OI、价格、主动成交门槛与现货确认设置';
+    return result;
+  }
+  result.config = Object.freeze({ oiPct: config.oiPct, pricePct: config.pricePct,
+    flowSharePct: config.flowSharePct, requireSpot: config.requireSpot });
+  // Retain an independent immutable configuration receipt, including for waiting states.
+  config = result.config;
+  const sellThreshold = directionSellThreshold(config.flowSharePct);
   if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.rows)) {
     result.reason = '缺少有效订单流快照，等待同合约5分钟数据';
     return result;
@@ -82,27 +96,44 @@ export function assessDirection(snapshot: FlowSnapshot | null, assetId: string |
     result.reason = '合约主动买占比与成交差额不一致，暂不判断方向';
     return result;
   }
-  if (futures.oiChange5m < DIRECTION_RULES.oiPct) {
+  // Quality is independent of whether a numeric condition fails first. Required
+  // spot gaps must never turn an early futures wait into a usable weak signal.
+  let selectedSpot: FlowContextRow | null | undefined;
+  const getSpot = (): FlowContextRow | null => {
+    if (selectedSpot === undefined) {
+      const sameQuoteSnapshot: FlowSnapshot = { ...snapshot, rows: snapshot.rows.filter(row =>
+        row?.market?.venue !== 'spot' || row.market.quoteAsset === futures.quoteAsset) };
+      selectedSpot = selectFlowContext(sameQuoteSnapshot, assetId, now, preferredMarketKey).spot;
+    }
+    return selectedSpot;
+  };
+  const requiredSpot = config.requireSpot ? getSpot() : null;
+  const completeRequiredSpot = hasTrade(requiredSpot)
+    && (!preferredMarketKey?.startsWith('spot:') || requiredSpot.marketKey === preferredMarketKey)
+    && requiredSpot.windowStart === futures.windowStart && requiredSpot.windowEnd === futures.windowEnd
+    && sameSide(requiredSpot.buyShare5m, requiredSpot.delta5m);
+  result.quality = !config.requireSpot || completeRequiredSpot ? 'valid' : 'unavailable';
+  if (new ExactDecimal(futures.oiChange5m).lessThan(config.oiPct)) {
     result.reason = futures.oiChange5m < 0
       ? 'OI 正在减少，无法仅凭减仓区分平仓方向或判定反转'
-      : '5分钟 OI 增幅未达 +5%，增仓确认不足';
+      : `5分钟 OI 增幅未达 +${config.oiPct}%，增仓确认不足`;
     return result;
   }
-  const long = futures.priceChange5m > DIRECTION_RULES.pricePct && futures.buyShare5m >= DIRECTION_RULES.futuresBuyPct;
-  const short = futures.priceChange5m < -DIRECTION_RULES.pricePct && futures.buyShare5m <= DIRECTION_RULES.futuresSellPct;
+  const priceChange = new ExactDecimal(futures.priceChange5m), buyShare = new ExactDecimal(futures.buyShare5m);
+  const long = priceChange.greaterThan(config.pricePct) && buyShare.greaterThanOrEqualTo(config.flowSharePct);
+  const short = priceChange.lessThan(new ExactDecimal(config.pricePct).negated()) && buyShare.lessThanOrEqualTo(sellThreshold);
   if (!long && !short) {
-    result.reason = Math.abs(futures.priceChange5m) <= DIRECTION_RULES.pricePct
-      ? '增仓但价格仍在 ±0.5% 内，等待明确方向'
-      : '价格方向与主动成交未同时满足门槛，暂不追随';
+    result.reason = priceChange.abs().lessThanOrEqualTo(config.pricePct)
+      ? `增仓但价格仍在 ±${config.pricePct}% 内，等待明确方向`
+      : `价格方向与主动成交未同时满足门槛（多：买占比≥${config.flowSharePct}%；空：买占比≤${sellThreshold}%），暂不追随`;
     return result;
   }
 
   // Prefer the same quote, never silently merge USDT/USDC amounts or confirm a
   // different selected spot market. Unmatched spot coverage is explicitly missing.
-  const sameQuoteSnapshot: FlowSnapshot = { ...snapshot, rows: snapshot.rows.filter(row =>
-    row?.market?.venue !== 'spot' || row.market.quoteAsset === futures.quoteAsset) };
-  const { spot } = selectFlowContext(sameQuoteSnapshot, assetId, now, preferredMarketKey);
+  const spot = getSpot();
   let confirmed = false;
+  let spotComplete = false;
   if (preferredMarketKey?.startsWith('spot:') && spot?.marketKey !== preferredMarketKey)
     result.risks.push('所选现货的身份或计价币不匹配、或数据不可用；不替换其他现货完成确认');
   else if (!spot) result.risks.push(`缺少同标的 ${futures.quoteAsset} 现货确认`);
@@ -113,12 +144,15 @@ export function assessDirection(snapshot: FlowSnapshot | null, assetId: string |
   else {
     const validPrice = finite(spot.priceChange5m);
     const validFlow = finite(spot.buyShare5m) && finite(spot.delta5m) && sameSide(spot.buyShare5m, spot.delta5m);
+    spotComplete = validPrice && validFlow;
     result.evidence.push(`现货 ${spot.symbol} · 主动买 ${spot.buyShare5m === null ? '—' : `${spot.buyShare5m.toFixed(1)}%`} · 价格 ${validPrice ? signedPct(spot.priceChange5m!) : '—'}`);
     const contradictory = long
       ? (validFlow && spot.buyShare5m! <= DIRECTION_RULES.spotSellPct) || (validPrice && spot.priceChange5m! < 0)
       : (validFlow && spot.buyShare5m! >= DIRECTION_RULES.spotBuyPct) || (validPrice && spot.priceChange5m! > 0);
     if (contradictory) {
-      result.confirmation = '现货与合约冲突';
+      // One verified contrary metric is an observed conflict, not a missing-data wait.
+      result.quality = 'valid';
+      result.confirmation = config.requireSpot ? '等待现货同向' : '现货与合约冲突';
       result.reason = '现货主动成交或价格明确反向，撤销合约方向候选';
       return result;
     }
@@ -127,11 +161,17 @@ export function assessDirection(snapshot: FlowSnapshot | null, assetId: string |
     if (!confirmed) result.risks.push(!validFlow || !validPrice ? '现货部分指标缺失或成交口径不一致，不能完成确认'
       : '现货尚未同时满足主动成交与价格同向条件');
   }
+  const criteria = `OI增幅≥${config.oiPct}%、价格${long ? '涨' : '跌'}幅>${config.pricePct}%、合约主动买${long ? `≥${config.flowSharePct}` : `≤${sellThreshold}`}%`;
+  if (config.requireSpot && !confirmed) {
+    if (!spotComplete) result.quality = 'unavailable';
+    result.confirmation = '等待现货同向';
+    result.reason = `${criteria}；当前设置要求现货同向，尚未确认`;
+    return result;
+  }
   result.bias = long ? 'long' : 'short';
   result.label = long ? '偏多候选' : '偏空候选';
   result.confirmation = confirmed ? '现货同向 · 仍需入场确认' : '待现货确认 · 不宜直接开仓';
-  result.reason = long ? '5分钟增仓上涨且合约主动买入占优，可优先观察做多机会'
-    : '5分钟增仓下跌且合约主动卖出占优，可优先观察做空机会';
-  result.invalidation = `OI增幅低于5%、价格${long ? '涨幅不再超过0.5%' : '跌幅不再超过0.5%'}、合约主动买${long ? '低于60%' : '高于40%'}、现货明确反向或必需数据过期，即退回观望；不是止损价`;
+  result.reason = `5分钟${criteria}，可优先观察做${long ? '多' : '空'}机会`;
+  result.invalidation = `OI增幅低于${config.oiPct}%、价格${long ? '涨' : '跌'}幅不再超过${config.pricePct}%、合约主动买${long ? `低于${config.flowSharePct}` : `高于${sellThreshold}`}%、${config.requireSpot ? '现货同向确认不再成立' : '现货明确反向'}或必需数据过期，即退回观望；不是止损价`;
   return result;
 }

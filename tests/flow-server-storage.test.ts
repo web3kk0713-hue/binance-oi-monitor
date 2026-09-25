@@ -49,6 +49,17 @@ afterEach(async () => {
 });
 
 describe('durable flow evidence and replay boundaries', () => {
+  it('preserves independent raw mark strings and source times in snapshots after database restart', async () => {
+    const path = temporaryPath(), first = await open(path);
+    const sample = snapshot();
+    sample.marks = [{ marketKey: market.key, markPrice: '100.123456789012345678901234',
+      sourceTime: clock - 1000, receivedAt: clock - 500, source: 'binance-mark-stream' }];
+    expect(sample.rows[0].funding).toBeNull(); expect(sample.rows[0].price).toBeNull();
+    await first.store.saveSnapshot(sample); await close(first.db);
+    const second = await open(path), restored = await second.store.latest();
+    expect(restored?.marks).toEqual(sample.marks);
+    expect(restored?.rows[0].funding).toBeNull(); expect(restored?.rows[0].price).toBeNull();
+  });
   it('persists quotes in their native currency and restores candles, exact event evidence, depth and OI after restart', async () => {
     const path = temporaryPath(); const first = await open(path);
     const value = event(); const book = depth();
