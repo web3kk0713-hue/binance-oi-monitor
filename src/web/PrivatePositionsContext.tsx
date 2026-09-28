@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPositionRisk, stepPositionRisk } from '../shared/positionRisk';
 import { positionMarketFrame } from '../shared/positionFrame';
+import type { DirectionConfig } from '../shared/directionConfig';
 import type { ManualPosition, PositionBook, PositionMarketFrame, PositionRiskEvent, RiskPlanDraft } from '../shared/positionTypes';
 import type { Snapshot } from '../shared/types';
 import { useDirectionSettings } from './DirectionSettingsContext';
@@ -18,6 +19,9 @@ function usePositionBookRuntime(snapshot: Snapshot | null, settings: Settings) {
   const source = useRef({ flow: flow.data, snapshot, config, settings }); source.current = { flow: flow.data, snapshot, config, settings };
   const frameFor = useCallback((state: PositionBook['positions'][number], at: number) => positionMarketFrame(state.position,
     source.current.flow, source.current.snapshot, at, state.plan?.directionConfig ?? source.current.config), []);
+  // Preview the requested settings without changing the already-adopted monitoring frame or subscribing again.
+  const adviceFrameFor = useCallback((position: ManualPosition, at: number, analysisConfig: DirectionConfig) => positionMarketFrame(position,
+    source.current.flow, source.current.snapshot, at, analysisConfig), []);
   const accept = useCallback((next: PositionBook) => { setBook(old => next.revision >= old.revision ? next : old); setLoaded(true); setError(''); }, []);
   const deliver = useCallback(async () => {
     if (notifying.current) return; notifying.current = true;
@@ -102,7 +106,7 @@ function usePositionBookRuntime(snapshot: Snapshot | null, settings: Settings) {
     return { at, frames, issues };
   }, [book.positions, now, flow.data, snapshot, frameFor]);
   const markets = useMemo(() => (flow.data?.rows ?? []).filter(row => row.market.venue === 'futures' && row.market.quoteAsset === 'USDT').map(row => row.market).sort((a, b) => a.symbol.localeCompare(b.symbol)), [flow.data]);
-  return { book, loaded, error, now: observed.at, frames: observed.frames, issues: observed.issues, markets, config, add, confirm, close, popups,
+  return { book, loaded, error, now: observed.at, frames: observed.frames, adviceFrameFor, issues: observed.issues, markets, config, add, confirm, close, popups,
     dismiss: (id: string) => setPopups(previous => previous.filter(event => event.id !== id)) };
 }
 type Runtime = ReturnType<typeof usePositionBookRuntime>;

@@ -4,6 +4,8 @@ import type { ConfirmedRiskPlan, ManualPosition, MarkObservation, PositionMarket
   PositionRiskEvent, PositionRiskResult, PositionRiskState, PositionRule, PositionValuation, RiskPlanDraft } from './positionTypes';
 
 const D = Decimal.clone({ precision: 80 });
+/** Applies only to newly accepted ATR proposals, never to an already armed plan. */
+export const RISK_PROPOSAL_TTL_MS = 60_000;
 const RULES: PositionRule[] = ['stop', 'take-profit', 'trailing', 'signal-weakening'];
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const time = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
@@ -109,13 +111,13 @@ export function proposeRiskPlan(position: ManualPosition, frame: PositionMarketF
   const atr = frame.atr;
   if (!atr || atr.marketKey !== position.marketKey || !positive(atr.value) || !time(atr.asOf) || !time(atr.lastCandleAt)
     || atr.lastCandleAt > atr.asOf || atr.asOf > now || now - atr.asOf > 30_000 || now - atr.lastCandleAt > 90_000)
-    return { plan: null, error: '同合约 ATR 数据缺失或过期；可等待完整数据或主动填写手动方案' };
+    return { plan: null, error: '同合约 ATR 数据缺失或过期，请等待完整行情后重新分析' };
   const price = new D(frame.mark.markPrice), unit = new D(atr.value), distance = unit.mul(2), side = position.side === 'long' ? 1 : -1;
   const activation = price.plus(distance.mul(side));
   const plan: RiskPlanDraft = { stopPrice: price.minus(distance.mul(side)).toFixed(), takeProfitPrice: price.plus(distance.mul(side).mul(2)).toFixed(),
     trailing: { activationPrice: activation.toFixed(), callbackPct: activation.gt(0) ? unit.div(activation).mul(100).toSignificantDigits(6).toFixed() : '0' },
     signalWeakening: true, directionConfig: { ...config }, method: 'atr-example', generatedAt: now };
-  return validPlan(plan, position) ? { plan, error: null } : { plan: null, error: '当前波动示例会产生无效价格或回撤比例，请改用手动方案' };
+  return validPlan(plan, position) ? { plan, error: null } : { plan: null, error: '当前波动数据无法形成有效方案，请等待行情更新后重新分析' };
 }
 
 function validSignal(frame: PositionMarketFrame, state: PositionRiskState, now: number): boolean {
@@ -147,6 +149,8 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
     if (!integer(command.expectedPlanRevision) || command.expectedPlanRevision !== (state.plan?.revision ?? 0)) return rejected('方案版本已变化，请重新查看当前方案后确认');
     if (!validPlan(command.plan, state.position) || command.plan.generatedAt > command.now) return rejected('风险方案参数或生成时间无效');
     if (state.plan && sameDraft(state.plan, command.plan)) return finish(valuePosition(state.position, command.frame, command.now));
+    if (command.plan.method === 'atr-example' && command.now - command.plan.generatedAt >= RISK_PROPOSAL_TTL_MS)
+      return rejected('这份建议已过期，请重新分析并核对新建议后采纳；原已启用计划保持不变');
   }
   const mark = command.frame?.mark;
   if (!freshMark(mark, state.position, command.now)) {

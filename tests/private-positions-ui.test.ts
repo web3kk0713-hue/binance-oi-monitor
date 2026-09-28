@@ -1,7 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_DIRECTION_CONFIG } from '../src/shared/directionConfig';
+import { DEFAULT_DIRECTION_CONFIG, DIRECTION_PRESETS } from '../src/shared/directionConfig';
+import { proposePositionAdvice } from '../src/shared/positionAdvice';
 import { createPositionRisk, stepPositionRisk } from '../src/shared/positionRisk';
 import type { ManualPosition, PositionBook, PositionMarketFrame, PositionRiskEvent, PositionRiskState, RiskPlanDraft } from '../src/shared/positionTypes';
 import type { AlertEvent } from '../src/shared/types';
@@ -13,6 +14,7 @@ vi.mock('../src/web/PrivatePositionsContext', () => ({ usePrivatePositions: () =
 vi.mock('../src/web/FlowMonitorContext', () => ({ useSharedFlowMonitor: () => mock.flow }));
 import MyPositions from '../src/web/MyPositions';
 import RiskAlertCenter from '../src/web/RiskAlertCenter';
+import { AdviceDetails, PositionAdvicePanel } from '../src/web/PositionAdvicePanel';
 
 type Runtime = ReturnType<typeof usePrivatePositions>;
 const NOW = Date.UTC(2026, 8, 25, 12);
@@ -37,7 +39,9 @@ function triggered(offset = 1000) {
 }
 function runtime(states: PositionRiskState[] = [], events: PositionRiskEvent[] = [], changes: Partial<Runtime> = {}): Runtime {
   const book: PositionBook = { schemaVersion: 1, revision: 1, updatedAt: NOW, positions: states, events, notified: [] };
-  return { book, loaded: true, error: '', now: NOW, frames: new Map(states.map(state => [state.position.id, frame()])),
+  const frames = changes.frames ?? new Map(states.map(state => [state.position.id, frame()]));
+  return { book, loaded: true, error: '', now: NOW, frames,
+    adviceFrameFor: vi.fn(p => frames.get(p.id) ?? { mark: null, atr: null, signal: null }),
     issues: new Map(), markets: [], config: { ...DEFAULT_DIRECTION_CONFIG }, popups: [],
     add: vi.fn(async () => '00000000-0000-4000-8000-000000000001' as const), confirm: vi.fn(async () => {}), close: vi.fn(async () => {}), dismiss: vi.fn(), ...changes };
 }
@@ -72,13 +76,13 @@ describe('manual-position page status and trust boundaries', () => {
   it('shows drafts as unarmed even when a fresh mark can estimate PnL', () => {
     mock.runtime = runtime([createPositionRisk(position())], [], { frames: new Map([['p1', frame('110')]]) });
     const html = renderPositions();
-    expect(html).toContain('待确认方案'); expect(html).toContain('提醒尚未启用'); expect(html).toContain('设置风险方案');
+    expect(html).toContain('待采纳建议'); expect(html).toContain('提醒尚未启用'); expect(html).toContain('查看系统建议');
     expect(html).not.toContain('计划已启用'); expect(visibleValues(html)[0]).toBe('100');
   });
   it('shows armed plan prices and the review action without implying an exchange order', () => {
     mock.runtime = runtime([armed()]);
     const html = renderPositions();
-    expect(html).toContain('计划已启用'); expect(html).toContain('标记价监控中'); expect(html).toContain('查看 / 修改方案');
+    expect(html).toContain('计划已启用'); expect(html).toContain('标记价监控中'); expect(html).toContain('重新分析建议');
     expect(html).toContain('保护价 / 止盈价'); expect(visibleValues(html)[3]).toBe('95'); expect(html).toContain('止盈 120');
     expect(html).toContain('我已离场'); expect(html).not.toContain('已自动平仓');
   });
@@ -155,6 +159,106 @@ describe('manual-position page status and trust boundaries', () => {
     expect(html).toContain('aria-label="估算浮盈亏说明"'); expect(html).toContain('aria-label="标记价说明"');
     expect(html).toContain('aria-expanded="false"'); expect(html).not.toContain('role="tooltip"');
     expect(html).toContain('手工估算，不是交易所实际仓位');
+  });
+});
+
+describe('system-generated advice is read-only until explicit adoption', () => {
+  function completeFrame(markPrice = '100'): PositionMarketFrame {
+    return { ...frame(markPrice), atr: { marketKey: 'futures:TESTUSDT', value: '2', asOf: NOW, lastCandleAt: NOW - 1000 } };
+  }
+  function setup(state = createPositionRisk(position()), data = completeFrame(), changes: Partial<Runtime> = {}) {
+    const value = runtime([state], [], { frames: new Map([[state.position.id, data]]), ...changes });
+    mock.runtime = value;
+    const onDone = vi.fn();
+    return { value, onDone, render: () => renderToStaticMarkup(createElement(PositionAdvicePanel, { state, onDone })) };
+  }
+  function primaryButton(html: string) {
+    const button = html.match(/<button[^>]*class="button primary"[^>]*>[^<]*<\/button>/)?.[0];
+    expect(button).toBeDefined();
+    return button!;
+  }
+  it('presents a ready proposal without input fields, manual parameters or a checkbox gate', () => {
+    const { value, onDone, render } = setup(), before = structuredClone(value.book), html = render();
+    expect(html).toContain('系统离场建议'); expect(html).toContain('建议保护价'); expect(html).toContain('<strong>96</strong>');
+    expect(html).toContain('<strong>108</strong>'); expect(html).toContain('你不用填写止损止盈参数');
+    expect(html).toContain('采纳后才开始提醒，录入持仓不等于开启提醒');
+    expect(html).not.toMatch(/<(?:input|select|textarea|form)\b/); expect(html).not.toContain('type="checkbox"');
+    expect(primaryButton(html)).toContain('采纳建议并开启提醒'); expect(primaryButton(html)).not.toContain('disabled');
+    expect(value.confirm).not.toHaveBeenCalled(); expect(value.close).not.toHaveBeenCalled(); expect(onDone).not.toHaveBeenCalled();
+    expect(value.book).toEqual(before); expect(value.book.positions[0].phase).toBe('draft');
+  });
+  it('states the frozen reference price/time, analysis validity and no-trading boundary', () => {
+    const html = setup().render();
+    expect(html).toContain('标记价 100'); expect(html).toContain('生成后 60 秒内可采纳');
+    expect(html).toContain('过期需重新分析；已启用计划不受此时限影响');
+    expect(html).toContain('规则生成 · 未经收益验证 · 仅提醒，不自动交易');
+    expect(html).toContain('为什么这样建议'); expect(html).toContain('不是从开仓价计算的盈亏比');
+  });
+  it.each(['ATR', 'mark', 'wrong ATR contract'] as const)('waits with adoption disabled when %s data is unavailable, without a manual fallback', missing => {
+    const data = completeFrame();
+    if (missing === 'ATR') data.atr = null;
+    if (missing === 'mark') data.mark = null;
+    if (missing === 'wrong ATR contract') data.atr!.marketKey = 'futures:OTHERUSDT';
+    const { value, render } = setup(createPositionRisk(position()), data), html = render();
+    expect(html).toContain('正在等待可用行情，暂不给出价格建议'); expect(html).toContain('数据恢复后自动分析，不需要你填写参数');
+    expect(html).toContain('当前没有新提醒计划被启用'); expect(primaryButton(html)).toContain('disabled=""');
+    expect(html).not.toMatch(/<(?:input|select|textarea)\b/); expect(html).not.toContain('手动填写');
+    expect(html).not.toContain('class="advice-prices"'); expect(value.confirm).not.toHaveBeenCalled();
+  });
+  it('keeps the prior plan and version explicitly in force until the new suggestion is adopted', () => {
+    const { value, render } = setup(armed()), before = structuredClone(value.book), html = render();
+    expect(html).toContain('当前 v1 提醒计划保持不变；只有采纳本次建议才会替换'); expect(html).toContain('保留原方案');
+    expect(primaryButton(html)).toContain('采纳建议并替换提醒'); expect(primaryButton(html)).not.toContain('disabled');
+    expect(value.book).toEqual(before); expect(value.book.positions[0].plan!.stopPrice).toBe('95');
+    expect(value.confirm).not.toHaveBeenCalled();
+  });
+  it('analyzes new settings separately from the already-adopted monitoring frame', () => {
+    const state = armed(), data = completeFrame();
+    data.signal = { marketKey: state.position.marketKey, windowEnd: NOW, asOf: NOW,
+      valid: true, bias: 'long', config: { ...DEFAULT_DIRECTION_CONFIG } };
+    const config = { ...DIRECTION_PRESETS.sensitive };
+    const adviceFrameFor = vi.fn<Runtime['adviceFrameFor']>((_position, _at, requested) => ({
+      ...data, signal: { ...data.signal!, config: { ...requested } },
+    }));
+    const { value, render } = setup(state, data, { config, adviceFrameFor }), before = structuredClone(value.book);
+    const html = render();
+    expect(adviceFrameFor).toHaveBeenCalledWith(state.position, NOW, config);
+    expect(html).toContain('与持仓同向'); expect(html).not.toContain('方向数据不足或过期');
+    expect(value.frames.get(state.position.id)!.signal!.config).toEqual(DEFAULT_DIRECTION_CONFIG);
+    expect(value.book).toEqual(before); expect(value.confirm).not.toHaveBeenCalled();
+  });
+  it.each(['runtime', 'observation'] as const)('shows a %s failure and blocks adoption even if a price proposal exists', source => {
+    const message = source === 'runtime' ? '持仓存储失败，监控暂停' : '同源标记价冲突，监控暂停';
+    const changes = source === 'runtime' ? { error: message } : { issues: new Map([['p1', message]]) };
+    const { value, render } = setup(createPositionRisk(position()), completeFrame(), changes), html = render();
+    expect(html).toContain(`role="status">${message}`); expect(primaryButton(html)).toContain('disabled=""');
+    expect(value.confirm).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['long', '125', '建议目标离场价'], ['short', '80', '建议目标离场价'],
+  ] as const)('labels a %s target that still loses money as an exit target, not profit', (side, entryPrice, label) => {
+    const state = createPositionRisk(position({ side, entryPrice, margin: '200', leverage: '4' }));
+    const { value, render } = setup(state), html = render();
+    expect(html).toContain(label); expect(html).not.toContain('建议止盈观察价');
+    expect(html).toContain('达到目标价仍预计亏损，不是回本或获利承诺');
+    expect(html).toMatch(/触线估算盈亏 -[0-9]/); expect(value.confirm).not.toHaveBeenCalled();
+  });
+  it('renders AdviceDetails using entry-based profit and incremental risk as different quantities', () => {
+    const p = position({ margin: '200', leverage: '5' });
+    const result = proposePositionAdvice(p, completeFrame('110'), NOW, DEFAULT_DIRECTION_CONFIG);
+    expect(result.error).toBeNull();
+    const html = renderToStaticMarkup(createElement(AdviceDetails, { advice: result.advice! }));
+    expect(html).toContain('触线估算盈亏 +60 USDT · +30%'); expect(html).toContain('触线估算盈亏 +180 USDT · +90%');
+    expect(html).toContain('预计还会回吐／亏损 40 USDT，相当于输入保证金的 20%');
+    expect(html).toContain('建议止盈观察价'); expect(html).not.toContain('达到目标价仍预计亏损');
+    expect(html).toContain('采纳后如何提醒'); expect(html).not.toMatch(/<(?:input|select|textarea)\b/);
+  });
+  it('does not turn short-side negative zero at breakeven into a loss warning', () => {
+    const result = proposePositionAdvice(position({ side: 'short', entryPrice: '92', margin: '92', leverage: '1' }), completeFrame(), NOW, DEFAULT_DIRECTION_CONFIG);
+    expect(result.error).toBeNull();
+    const html = renderToStaticMarkup(createElement(AdviceDetails, { advice: result.advice! }));
+    expect(html).toContain('触线估算盈亏 0 USDT · 0%'); expect(html).not.toContain('达到目标价仍预计亏损');
+    expect(html).not.toContain('盈亏 -0 USDT');
   });
 });
 

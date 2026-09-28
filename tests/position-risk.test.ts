@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DIRECTION_CONFIG, DIRECTION_PRESETS } from '../src/shared/directionConfig';
-import { createPositionRisk, proposeRiskPlan, stepPositionRisk, validPositionState, valuePosition } from '../src/shared/positionRisk';
+import { createPositionRisk, proposeRiskPlan, RISK_PROPOSAL_TTL_MS, stepPositionRisk, validPositionState, valuePosition } from '../src/shared/positionRisk';
 import type { ManualPosition, PositionMarketFrame, PositionRiskState, RiskPlanDraft } from '../src/shared/positionTypes';
 
 const NOW = Date.UTC(2026, 8, 25, 12);
@@ -90,6 +90,53 @@ describe('explicit volatility draft and confirmation', () => {
     const callbackPct = '1.923076923076923076923076923076923076923';
     const state = arm(position(), plan({ trailing: { activationPrice: '110', callbackPct } }));
     expect(state.plan!.trailing!.callbackPct).toBe(callbackPct);
+  });
+  it.each([0, RISK_PROPOSAL_TTL_MS - 1, RISK_PROPOSAL_TTL_MS, RISK_PROPOSAL_TTL_MS + 1])
+    ('accepts ATR suggestions only before the exclusive 60-second expiry at age %s', age => {
+      const draft = proposeRiskPlan(position(), frame(), NOW, DEFAULT_DIRECTION_CONFIG).plan!;
+      const state = createPositionRisk(position());
+      const result = stepPositionRisk(state, { type: 'confirm', expectedPlanRevision: 0, plan: draft,
+        frame: frame('102', NOW + age), now: NOW + age });
+      if (age < RISK_PROPOSAL_TTL_MS) {
+        expect(result.error).toBeNull();
+        // Accept precisely what was reviewed, not newly computed levels around the current 102 mark.
+        expect(result.state.plan).toMatchObject({ ...draft, revision: 1, confirmedAt: NOW + age });
+      } else {
+        expect(result.error).toContain('建议已过期'); expect(result.state).toBe(state);
+        expect(result.state.phase).toBe('draft'); expect(result.events).toEqual([]);
+      }
+    });
+  it('rejects an expired ATR replacement without changing the active plan or its latched state', () => {
+    const active = tick(arm(), '112', 1000).state;
+    const replacement = proposeRiskPlan(position(), frame(), NOW, DEFAULT_DIRECTION_CONFIG).plan!;
+    const now = NOW + RISK_PROPOSAL_TTL_MS;
+    const result = stepPositionRisk(active, { type: 'confirm', expectedPlanRevision: 1, plan: replacement, frame: frame('100', now), now });
+    expect(result.error).toContain('建议已过期'); expect(result.state).toBe(active);
+    expect(result.state).toMatchObject({ phase: 'armed', trailingActive: true, bestPrice: '112', plan: { revision: 1, stopPrice: '95' } });
+    expect(result.events).toEqual([]);
+  });
+  it('keeps already confirmed ATR plans valid and same-draft retries idempotent after proposal expiry', () => {
+    const draft = proposeRiskPlan(position(), frame(), NOW, DEFAULT_DIRECTION_CONFIG).plan!;
+    const active = tick(arm(position(), draft), '109', 1000).state;
+    const restored = JSON.parse(JSON.stringify(active)) as PositionRiskState;
+    expect(validPositionState(restored)).toBe(true);
+    const now = NOW + RISK_PROPOSAL_TTL_MS * 2;
+    const retried = stepPositionRisk(restored, { type: 'confirm', expectedPlanRevision: 1, plan: draft, frame: frame('95', now), now });
+    expect(retried.error).toBeNull(); expect(retried.state).toEqual(restored); expect(retried.events).toEqual([]);
+    expect(tick(restored, '95', RISK_PROPOSAL_TTL_MS * 2).events.some(event => event.rule === 'stop')).toBe(true);
+    expect(stepPositionRisk(restored, { type: 'confirm', expectedPlanRevision: 0, plan: draft, frame: frame('100', now), now }).error).toContain('版本');
+  });
+  it('does not apply ATR suggestion expiry to an explicitly entered manual plan', () => {
+    const now = NOW + RISK_PROPOSAL_TTL_MS * 2;
+    const result = stepPositionRisk(createPositionRisk(position()), { type: 'confirm', expectedPlanRevision: 0, plan: plan(), frame: frame('100', now), now });
+    expect(result.error).toBeNull(); expect(result.state.plan?.method).toBe('manual');
+  });
+  it('explains unavailable suggestions as waiting for analysis, not mandatory self-entered risk prices', () => {
+    const missing = proposeRiskPlan(position(), frame('100', NOW, { atr: null }), NOW, DEFAULT_DIRECTION_CONFIG);
+    const unusable = proposeRiskPlan(position(), frame('100', NOW, { atr: { ...frame().atr!, value: '100' } }), NOW, DEFAULT_DIRECTION_CONFIG);
+    for (const result of [missing, unusable]) {
+      expect(result.plan).toBeNull(); expect(result.error).toContain('重新分析'); expect(result.error).not.toMatch(/手动|填写/);
+    }
   });
   it.each(['95', '94', '120', '121'])('blocks confirmation when the current long price %s already crossed a line', price => {
     const result = stepPositionRisk(createPositionRisk(position()), { type: 'confirm', plan: plan(), frame: frame(price), now: NOW, expectedPlanRevision: 0 });
