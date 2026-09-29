@@ -31,6 +31,7 @@ export class MonitorScheduler {
   }
   status(): BackendStatus {
     return { mode: 'server', version: '0.1.0', collecting: this.active !== null, lastSuccess: this.lastSuccess,
+      ...(this.config.deploymentTier ? { deploymentTier: this.config.deploymentTier } : {}),
       storage: this.store.kind, pushEnabled: this.push.enabled, retentionDays: 30, lastError: this.lastError,
       collectionIntervalMs: COLLECTION_INTERVAL_MS, lastDurationMs: this.lastDurationMs, rawRetentionDays: 7,
       retryAt: this.retryAt > this.now() ? this.retryAt : 0 };

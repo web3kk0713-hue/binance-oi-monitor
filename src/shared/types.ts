@@ -83,6 +83,7 @@ export interface Collector {
 }
 export interface BackendStatus {
   mode: 'server'; version: string; collecting: boolean; lastSuccess: number | null;
+  deploymentTier?: 'free-preview';
   storage: string; pushEnabled: boolean; retentionDays: number; lastError: string | null;
   collectionIntervalMs?: number; lastDurationMs?: number | null; rawRetentionDays?: number;
   retryAt?: number;

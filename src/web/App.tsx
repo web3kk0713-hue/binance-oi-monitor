@@ -4,7 +4,7 @@ import { analyzeHistory, type HistoryView } from '../shared/history';
 import { analyzeShortline, type ShortlineAnalysis } from '../shared/shortline';
 import { displayedAsset } from '../shared/reliability';
 import type { MarketObservation } from '../shared/liveMarket';
-import type { AlertEvent, AlertState, AssetRow, Snapshot, Thresholds } from '../shared/types';
+import type { AlertEvent, AlertState, AssetRow, BackendStatus, Snapshot, Thresholds } from '../shared/types';
 import { Icon } from './Icons';
 import { age, clockTime, dateTime, money, percent, signed, signedMoney, tokenPrice } from './format';
 import { connectPush, disconnectPush, notificationSupport, registerNotifications, requestNotifications, showAlertNotification } from './notifications';
@@ -66,7 +66,7 @@ function Dialog({ title, children, onClose, className = '', description }: { tit
   </dialog>;
 }
 
-function SettingsDialog({ settings, onSave, onClose, pushConnected, onConnectPush, onDisconnectPush, onEnableNotifications, onDisableNotifications, onTest }: {
+export function SettingsDialog({ settings, onSave, onClose, pushConnected, onConnectPush, onDisconnectPush, onEnableNotifications, onDisableNotifications, onTest }: {
   settings: Settings; onSave: (next: Settings) => Promise<void>; onClose: () => void; pushConnected: boolean;
   onConnectPush: () => Promise<void>; onDisconnectPush: () => Promise<void>; onEnableNotifications: () => Promise<void>; onDisableNotifications: () => Promise<void>; onTest: () => void;
 }) {
@@ -91,17 +91,31 @@ function SettingsDialog({ settings, onSave, onClose, pushConnected, onConnectPus
       <fieldset><legend>OI / FDV 提醒阈值</legend><div className="threshold-inputs">
         {([{ key: 'warning', label: '黄色提醒', className: 'warning' }, { key: 'danger', label: '红色提醒', className: 'danger' }, { key: 'critical', label: '强提醒', className: 'critical' }] as const).map((item) => <label key={item.key}><span className={`threshold-label ${item.className}`}><i />{item.label}</span><span className="input-unit"><input type="number" min="0.1" step="0.1" required value={draft.thresholds[item.key]} onChange={(e) => setDraft((d) => ({ ...d, thresholds: { ...d.thresholds, [item.key]: Number(e.target.value) } }))} /><span>%</span></span></label>)}
       </div><label className="inline-field">同级提醒冷却 <span className="input-unit narrow"><input type="number" min="1" max="1440" required value={draft.thresholds.cooldownMinutes} onChange={(e) => setDraft((d) => ({ ...d, thresholds: { ...d.thresholds, cooldownMinutes: Number(e.target.value) } }))} /><span>分钟</span></span></label><p className="field-help">强提醒使用醒目弹窗。风险升级立即提醒；数据缺失或过期时不生成新告警。</p></fieldset>
-      <fieldset><legend>数据连接</legend><div className="mode-options"><label className={draft.mode === 'direct' ? 'mode-option selected' : 'mode-option'}><input type="radio" name="mode" value="direct" checked={draft.mode === 'direct'} onChange={() => setDraft((d) => ({ ...d, mode: 'direct' }))} /><span><strong>浏览器直连</strong><small>官方公共接口 · 页面开启时采集</small></span></label><label className={draft.mode === 'server' ? 'mode-option selected' : 'mode-option'}><input type="radio" name="mode" value="server" checked={draft.mode === 'server'} onChange={() => setDraft((d) => ({ ...d, mode: 'server' }))} /><span><strong>连接持续运行的后台</strong><small>跨设备历史 · 后台采集与推送</small></span></label></div>
-        {draft.mode === 'server' ? <label className="stacked-field">后台地址<input type="url" placeholder="https://monitor.example.com" value={draft.backendUrl} onChange={(e) => setDraft((d) => ({ ...d, backendUrl: e.target.value }))} required /><span className="field-help">先保存连接设置，再开启下方后台推送。</span></label> : <p className="field-help">直连模式关闭页面后暂停采集和提醒；后台标签页或设备休眠可能延迟采集。历史保存在本机浏览器，最多 30 天，取决于可用存储空间。{pushConnected ? '切回直连时会停用当前后台推送。' : ''}</p>}
+      <fieldset><legend>数据连接</legend><div className="mode-options"><label className={draft.mode === 'direct' ? 'mode-option selected' : 'mode-option'}><input type="radio" name="mode" value="direct" checked={draft.mode === 'direct'} onChange={() => setDraft((d) => ({ ...d, mode: 'direct' }))} /><span><strong>浏览器直连</strong><small>官方公共接口 · 页面开启时采集</small></span></label><label className={draft.mode === 'server' ? 'mode-option selected' : 'mode-option'}><input type="radio" name="mode" value="server" checked={draft.mode === 'server'} onChange={() => setDraft((d) => ({ ...d, mode: 'server' }))} /><span><strong>连接后台</strong><small>采集、历史与推送取决于后台配置</small></span></label></div>
+        {draft.mode === 'server' ? <label className="stacked-field">后台地址<input type="url" placeholder="https://monitor.example.com" value={draft.backendUrl} onChange={(e) => setDraft((d) => ({ ...d, backendUrl: e.target.value }))} required /><span className="field-help">先保存连接设置。免费测试后台闲置会休眠，历史可能丢失；后台运行且已配置推送时才能尝试关页提醒。</span></label> : <p className="field-help">直连模式关闭页面后暂停采集和提醒；后台标签页或设备休眠可能延迟采集。历史保存在本机浏览器，最多 30 天，取决于可用存储空间。{pushConnected ? '切回直连时会停用当前后台推送。' : ''}</p>}
       </fieldset>
       <fieldset><legend>系统通知</legend><div className="notification-setting"><div><strong>{permission === 'granted' ? settings.notifications ? '系统提醒已开启' : '已获权限，系统提醒已暂停' : permission === 'denied' ? '通知权限已被浏览器拒绝' : permission === 'unsupported' ? '此环境不支持系统通知' : '尚未开启系统通知'}</strong><p className="field-help">需要你主动授权，页内提醒始终可用。</p></div><button type="button" className="button secondary small" disabled={busy || permission === 'unsupported'} onClick={() => void action(settings.notifications ? onDisableNotifications : onEnableNotifications)}>{settings.notifications ? '暂停系统提醒' : '开启通知'}</button></div>
-        <div className="notification-actions"><button type="button" className="button text-button" onClick={onTest}><Icon name="bell" size={16} />测试提醒</button>{settings.mode === 'server' ? <button type="button" className="button text-button" disabled={busy} onClick={() => void action(pushConnected ? onDisconnectPush : onConnectPush)}><Icon name="server" size={16} />{pushConnected ? '停用后台推送' : '开启后台推送'}</button> : <span className="muted small-text">连接后台后可接收页面关闭时的推送</span>}</div>
-        {pushConnected ? <p className="success-note"><Icon name="check" size={14} /> 后台推送已连接；送达仍取决于设备在线状态和浏览器权限。</p> : null}
+        <div className="notification-actions"><button type="button" className="button text-button" onClick={onTest}><Icon name="bell" size={16} />测试提醒</button>{settings.mode === 'server' ? <button type="button" className="button text-button" disabled={busy} onClick={() => void action(pushConnected ? onDisconnectPush : onConnectPush)}><Icon name="server" size={16} />{pushConnected ? '停用后台推送' : '开启后台推送'}</button> : <span className="muted small-text">关页推送需要后台持续运行并配置推送</span>}</div>
+        {pushConnected ? <p className="success-note"><Icon name="check" size={14} /> 后台推送已连接；送达仍取决于后台运行、设备在线状态和浏览器权限。</p> : null}
       </fieldset>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button type="submit" className="button primary" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</button></div>
     </form>
   </Dialog>;
+}
+
+export function BackendConnectionBar({ mode, backend, warning, collecting, pushConnected, onSettings }: {
+  mode: Settings['mode']; backend: BackendStatus | null; warning: boolean; collecting: boolean;
+  pushConnected: boolean; onSettings: () => void;
+}) {
+  const freePreview = mode === 'server' && backend?.deploymentTier === 'free-preview';
+  const label = mode === 'direct' ? '浏览器采集 · 未连接后台' : freePreview ? '免费测试后台' : backend ? '已连接后台' : '后台连接待确认';
+  const description = mode === 'direct' ? '关页或休眠会中断采集，历史仅在本机' : freePreview ? '闲置会休眠 · 历史可能丢失' : backend ? `后台独立采集 · ${backend.retentionDays} 天历史${pushConnected ? ' · 推送已开启' : ''}` : '正在检查后台运行状态';
+  return <div className={`connection-bar ${mode === 'server' ? 'server-mode' : ''}`}>
+    <span className={`connection-badge${freePreview ? ' warning-text' : ''}`}><span className={`status-dot ${warning || freePreview ? 'warning-dot' : collecting ? 'loading-dot' : ''}`} />{label}</span>
+    <span className="connection-description">{description}</span>
+    <button onClick={onSettings}>{mode === 'direct' ? '连接后台' : '管理连接'}<Icon name="chevron" size={13} /></button>
+  </div>;
 }
 
 function SourceDialog({ row, snapshot, onClose }: { row: AssetRow | undefined; snapshot: Snapshot | null; onClose: () => void }) {
@@ -305,7 +319,7 @@ export default function App() {
       {view === 'risks' ? <Suspense fallback={<main className="workspace"><div className="chart-loading">加载风险记录…</div></main>}><RiskAlertCenter entryRequest={entryAlertRequest} alerts={alerts} onPosition={openPositions} onAsset={select} onFlow={openFlowEvent} onSettings={openSettings}/></Suspense> : null}
     </StructureShadowProvider></MarketPlansProvider></PrivatePositionsProvider></FlowMonitorProvider></DirectionSettingsProvider>
     {view === 'valuation' ? <main className="workspace" id="market">
-      <div className={`connection-bar ${settings.mode === 'server' ? 'server-mode' : ''}`}><span className="connection-badge"><span className={`status-dot ${monitor.error || backendIssue || snapshotStale || retainedCount || cooldown || !monitor.snapshot ? 'warning-dot' : monitor.collecting ? 'loading-dot' : ''}`} />{settings.mode === 'direct' ? '浏览器采集 · 未连接后台' : monitor.backend ? '已连接后台' : '后台连接待确认'}</span><span className="connection-description">{settings.mode === 'direct' ? '关页或休眠会中断采集，历史仅在本机' : monitor.backend ? `后台独立采集 · ${monitor.backend.retentionDays} 天历史${pushConnected ? ' · 推送已开启' : ''}` : '正在检查后台运行状态'}</span><button onClick={() => setDialog('settings')}>{settings.mode === 'direct' ? '连接后台' : '管理连接'}<Icon name="chevron" size={13} /></button></div>
+      <BackendConnectionBar mode={settings.mode} backend={monitor.backend} warning={Boolean(monitor.error || backendIssue || snapshotStale || retainedCount || cooldown || !monitor.snapshot)} collecting={monitor.collecting} pushConnected={pushConnected} onSettings={() => setDialog('settings')} />
       <div className="page-heading"><div><h1>合约市场<span>USDⓈ-M 永续</span></h1><p>源头持仓数据，滚动 5 分钟观察</p></div><div className="refresh-controls"><div className="refresh-meta"><strong>{cooldown ? `源接口冷却 ${cooldown} 秒` : monitor.collecting ? settings.mode === 'direct' ? '正在采集' : '检查后台快照' : monitor.error ? '等待重试' : `${countdown} 秒后刷新`}</strong><span>{monitor.snapshot ? `本轮观测 ${clockTime(monitor.snapshot.asOf)}` : `目标每 ${intervalSeconds} 秒采集`}</span></div><button className="button secondary refresh-button" onClick={monitor.refresh} disabled={monitor.collecting || cooldown > 0} aria-label="立即刷新行情"><Icon name="refresh" className={monitor.collecting ? 'spinning' : ''} size={17}/><span>刷新</span></button></div></div>
       {cooldown > 0 ? <div className="source-retry-note" role="status"><Icon name="warning" size={15}/><span>源接口冷却中，{cooldown} 秒后自动重试；手动刷新不会跳过冷却。</span></div> : null}
       {monitor.collecting && settings.mode === 'direct' ? <div className="collection-progress" role="status"><div className="progress-track"><div style={{ width: `${Math.max(3, progressPercent)}%` }} /></div><span>{monitor.progress?.total ? `${monitor.progress.done} / ${monitor.progress.total}` : '连接官方接口…'}{monitor.progress?.failed ? ` · ${monitor.progress.failed} 项暂未取得` : ''}</span></div> : null}

@@ -2,6 +2,7 @@ import { COLLECTION_INTERVAL_MS } from '../src/shared/types';
 
 export interface ServerConfig {
   host: string; port: number; allowedOrigins: string[];
+  deploymentTier?: 'free-preview';
   databaseUrl?: string; sqlitePath: string; cmcApiKey?: string;
   vapidPublicKey?: string; vapidPrivateKey?: string; vapidSubject?: string;
   notificationUrl: string; collectOnStart: boolean; collectionTimeoutMs: number;
@@ -15,6 +16,8 @@ function integer(value: string | undefined, fallback: number, minimum: number, m
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const deploymentTier = env.DEPLOYMENT_TIER || undefined;
+  if (deploymentTier !== undefined && deploymentTier !== 'free-preview') throw new Error('Invalid DEPLOYMENT_TIER');
   const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean);
   for (const origin of allowedOrigins) {
     const url = new URL(origin);
@@ -31,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     throw new Error('Invalid NOTIFICATION_URL');
   }
   return {
+    ...(deploymentTier ? { deploymentTier } : {}),
     host: env.HOST || '127.0.0.1', port: integer(env.PORT, 8787, 1, 65535), allowedOrigins,
     databaseUrl: env.DATABASE_URL || undefined, sqlitePath: env.SQLITE_PATH || './data/monitor.sqlite',
     cmcApiKey: env.CMC_API_KEY || undefined,

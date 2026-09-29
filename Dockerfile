@@ -11,6 +11,9 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node server ./server
 COPY --chown=node:node src/shared ./src/shared
 COPY --chown=node:node src/data ./src/data
+# The default SQLite directory must be writable without running the app as root.
+# Production still needs a persistent volume mounted here (or DATABASE_URL).
+RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD node -e "fetch('http://127.0.0.1:8787/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"

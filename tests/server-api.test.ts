@@ -17,12 +17,12 @@ function subscription(endpoint = 'https://fcm.googleapis.com/fcm/send/synthetic-
   const key = createECDH('prime256v1'); key.generateKeys();
   return { endpoint, expirationTime: null, keys: { p256dh: key.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') } };
 }
-async function setup(pushEnabled = false) {
+async function setup(pushEnabled = false, deploymentTier?: string) {
   const directory = mkdtempSync(join(tmpdir(), 'binance-oi-api-')); directories.push(directory);
   const store = new MonitorStore(new SqliteDatabase(join(directory, 'monitor.sqlite')));
   await store.initialize();
   const collector = { collect: vi.fn(async (): Promise<Snapshot> => { throw new Error('Synthetic tests never collect live data'); }) };
-  const result = await buildApp({ store, collector, config: loadConfig({ ALLOWED_ORIGINS: origin, NOTIFICATION_URL: `${origin}/binance-oi-monitor/` }),
+  const result = await buildApp({ store, collector, config: loadConfig({ ALLOWED_ORIGINS: origin, NOTIFICATION_URL: `${origin}/binance-oi-monitor/`, DEPLOYMENT_TIER: deploymentTier }),
     pushSender: { enabled: pushEnabled, publicKey: pushEnabled ? 'synthetic-key' : null, send: async () => {} }, startJobs: false });
   apps.push(result);
   return { ...result, store };
@@ -35,6 +35,11 @@ afterEach(async () => {
 });
 
 describe('backend API boundaries on real disk storage', () => {
+  it('reports the free-preview tier only when explicitly configured', async () => {
+    const regular = await setup(), preview = await setup(false, 'free-preview');
+    expect((await regular.app.inject('/api/v1/health')).json()).not.toHaveProperty('deploymentTier');
+    expect((await preview.app.inject('/api/v1/health')).json()).toMatchObject({ deploymentTier: 'free-preview', lastSuccess: null });
+  });
   it('serves health over an actual listening HTTP socket and reports unconfigured push honestly', async () => {
     const { app } = await setup();
     await app.listen({ host: '127.0.0.1', port: 0 });
