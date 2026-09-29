@@ -4,6 +4,8 @@
 
 **网站：[GitHub Pages](https://web3kk0713-hue.github.io/binance-oi-monitor/)**
 
+**免费后台试部署：[打开 Render 官方配置页](https://dashboard.render.com/blueprint/new?repo=https://github.com/web3kk0713-hue/binance-oi-monitor)**。只配置一个免费测试服务，不添加数据库或磁盘；闲置会休眠，历史可能丢失，不是 24 小时商业部署。创建前核对工作区与 `free` 套餐；若要求绑卡或出现费用请停止。自动创建曾返回 402，配置文件和部署入口不代表后台已上线。见[部署状态与验收](docs/workflow/hosting-preparation.md)。
+
 ## 进场计划与持仓退出
 
 变化监控和异常监控的所选合约下，直接提供「进场计划」。只支持身份明确的 USDT 永续；历史事件回看不能采纳当前计划。

@@ -1,0 +1,28 @@
+{
+  "previews": { "generation": "off" },
+  "services": [
+    {
+      "type": "web",
+      "name": "binance-oi-monitor-preview",
+      "runtime": "node",
+      "plan": "free",
+      "region": "singapore",
+      "repo": "https://github.com/web3kk0713-hue/binance-oi-monitor",
+      "branch": "main",
+      "autoDeployTrigger": "off",
+      "buildCommand": "npx --yes pnpm@11.25.0 install --prod --frozen-lockfile",
+      "startCommand": "node --import tsx server/index.ts",
+      "healthCheckPath": "/api/v1/health",
+      "envVars": [
+        { "key": "NODE_VERSION", "value": "24.21.0" },
+        { "key": "NODE_ENV", "value": "production" },
+        { "key": "HOST", "value": "0.0.0.0" },
+        { "key": "PORT", "value": "10000" },
+        { "key": "SQLITE_PATH", "value": "./data/monitor.sqlite" },
+        { "key": "ALLOWED_ORIGINS", "value": "https://web3kk0713-hue.github.io" },
+        { "key": "NOTIFICATION_URL", "value": "https://web3kk0713-hue.github.io/binance-oi-monitor/" },
+        { "key": "DEPLOYMENT_TIER", "value": "free-preview" }
+      ]
+    }
+  ]
+}

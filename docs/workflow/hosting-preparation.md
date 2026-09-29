@@ -66,6 +66,22 @@
 - 连接条显式显示“免费测试后台 / 闲置会休眠 · 历史可能丢失”，不再显示 30 天历史承诺；没有预填或切换到不存在的后台地址。
 - `pnpm test`：62 个测试文件、1663 项测试全部通过。`pnpm build` 与 `git diff --check` 通过。
 - 新标识已验证配置、API 和 SSR 语义；尚未完成浏览器视觉与真实云端验证。未取得后台 URL，因此 FDV 数据源恢复和后台实时采集均未通过验收。
-- 准备发布本轮代码；GitHub 代码或静态页面发布不代表 Render 后台创建成功。
+- 代码 `96d1080` 已推送，GitHub Pages 工作流成功，线上 HTML 已引用对应构建。GitHub 代码或静态页面发布不代表 Render 后台创建成功。
+
+## 官方 Blueprint 入口
+
+Chrome 控制连接再次失败后，新增根目录 `render.yaml`，使用 JSON 兼容 YAML 语法，以便无新增解析器依赖地校验。配置只有单个免费 Web Service，关闭自动部署和预览环境，不包含数据库、磁盘、定时任务、密钥或付费附加资源。
+
+发布并验证远端文件后，可用已登录的 Chrome 打开 [官方部署入口](https://dashboard.render.com/blueprint/new?repo=https://github.com/web3kk0713-hue/binance-oi-monitor)。此链接只预填配置，不等于已部署，也不绕过账户验证。
+
+1. 确认工作区为 `kk`，页面只列一个 `free` Web Service；若出现费用、付费资源或要求绑卡，停止，不提交支付信息。
+2. 在免费配置无误时点击创建/部署。若有 Git 授权，用户自行检查权限并完成；不要把密码、密钥或验证码发到聊天。
+3. 创建后通过 Render 连接器读取真实服务 URL，再验收数据；不需要提前手填后台域名或切换 GitHub 页面。
+
+本机没有 Render CLI，使用官方 JSON Schema 做结构校验；此校验不证明账号允许创建，也不证明数据源、资源容量或长期运行达标。
+
+- 2026-09-29：使用官方最新 draft/2020-12 Schema 和项目已有 Ajv 2020 校验，返回 `valid: true`（结构检查；未运行 Render CLI 或账户侧 Blueprint 验证）。
+- `tests/render-blueprint.test.ts` 三项防误配测试通过：单服务免费边界、固定启动契约、配置加载和无密钥/附加资源。
+- 完整回归：63 个文件、1666 项测试通过；TypeScript 检查和差异检查通过。没有新增依赖或更改默认前端数据连接。
 
 参考：[Render 免费实例限制](https://render.com/docs/free)、[持久磁盘限制](https://render.com/docs/disks)、[CMC 浏览器调用限制](https://coinmarketcap.com/api/documentation/faq)。
