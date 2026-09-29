@@ -16,7 +16,7 @@ function validRiskEvent(value: unknown): value is PositionRiskEvent {
   if (!text(e.id, 180) || !text(e.positionId, 100) || !text(e.symbol, 40) || !text(e.title, 200) || !text(e.message, 2000)
     || !Number.isSafeInteger(e.planRevision) || e.planRevision < 1 || !Number.isSafeInteger(e.timestamp) || e.timestamp <= 0
     || !Number.isSafeInteger(e.sourceTime) || e.sourceTime <= 0 || e.sourceTime > e.timestamp
-    || !['stop', 'take-profit', 'trailing', 'signal-weakening'].includes(e.rule) || !['long', 'short'].includes(e.side)
+    || !['stop', 'take-profit', 'trailing', 'signal-weakening', 'time-exit'].includes(e.rule) || !['long', 'short'].includes(e.side)
     || typeof e.afterGap !== 'boolean' || e.id !== `${e.positionId}:${e.planRevision}:${e.rule}`
     || typeof e.markPrice !== 'string' || e.markPrice.length > 128 || !/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(e.markPrice)) return false;
   try { const price = new Decimal(e.markPrice); return price.isFinite() && price.gt(0) && Math.abs(price.e) <= 100; } catch { return false; }

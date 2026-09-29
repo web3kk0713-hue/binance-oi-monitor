@@ -124,6 +124,22 @@ describe('response schemas and request identity', () => {
     const { worker, client } = setup(), pending = client.analyze(structureFixture()); worker.message(unavailable);
     expect(await pending).toEqual(unavailable.type === 'result' ? unavailable.output : null);
   });
+  it('preserves actual opening time and the suggested holding limit through the real worker engine', async () => {
+    const { worker, client } = setup(), input = structureFixture();
+    input.position.openedAt = input.now - 3_600_000; input.position.suggestedHoldingLimitMs = 1_800_000;
+    const pending = client.analyze(input); worker.finish();
+    expect((await pending).result).toMatchObject({ status: 'ready', advice: { position: {
+      openedAt: input.position.openedAt, suggestedHoldingLimitMs: 1_800_000,
+    } } });
+  });
+  it.each(['openedAt', 'suggestedHoldingLimitMs'] as const)('rejects dropped optional position identity %s', async field => {
+    const { worker, client } = setup(), input = structureFixture();
+    input.position.openedAt = input.now - 3_600_000; input.position.suggestedHoldingLimitMs = 1_800_000;
+    const pending = client.analyze(input), response = computeStructureRequest(worker.requests[0])!;
+    if (response.type !== 'result' || response.output.result.status !== 'ready') throw new Error('fixture failed');
+    delete response.output.result.advice.position[field]; worker.message(response);
+    await expect(pending).rejects.toThrow('无法校验');
+  });
   it('ignores a late duplicate response without resolving the next active request', async () => {
     const { worker, client } = setup(), first = client.analyze(structureFixture()); worker.message(unavailable); await first;
     let resolved = false; const second = client.analyze(structureFixture()).then(output => { resolved = true; return output; });

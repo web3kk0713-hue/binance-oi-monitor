@@ -1,12 +1,14 @@
 import Decimal from 'decimal.js';
 import { isDirectionConfig, type DirectionConfig } from './directionConfig';
+import { validateStructureAdvice } from './structureReplay';
 import type { ConfirmedRiskPlan, ManualPosition, MarkObservation, PositionMarketFrame, PositionRiskCommand,
   PositionRiskEvent, PositionRiskResult, PositionRiskState, PositionRule, PositionValuation, RiskPlanDraft } from './positionTypes';
 
 const D = Decimal.clone({ precision: 80 });
-/** Applies only to newly accepted ATR proposals, never to an already armed plan. */
+/** Applies only to newly accepted generated proposals, never to an already armed plan. */
 export const RISK_PROPOSAL_TTL_MS = 60_000;
-const RULES: PositionRule[] = ['stop', 'take-profit', 'trailing', 'signal-weakening'];
+export const HOLDING_LIMITS_MS: readonly number[] = Object.freeze([30, 60, 120, 240].map(minutes => minutes * 60_000));
+const RULES: PositionRule[] = ['stop', 'take-profit', 'trailing', 'signal-weakening', 'time-exit'];
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const time = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -22,7 +24,9 @@ function validPosition(value: unknown): value is ManualPosition {
     && value.marketKey === `futures:${value.symbol}` && typeof value.assetId === 'string'
     && /^[A-Za-z0-9:_-]{1,120}$/.test(value.assetId) && (value.side === 'long' || value.side === 'short')
     && positive(value.entryPrice) !== null && positive(value.margin) !== null
-    && positive(value.leverage)?.gte(1) === true && positive(value.leverage)?.lte(125) === true && time(value.createdAt);
+    && positive(value.leverage)?.gte(1) === true && positive(value.leverage)?.lte(125) === true && time(value.createdAt)
+    && (value.openedAt === undefined || time(value.openedAt) && value.openedAt <= value.createdAt)
+    && (value.suggestedHoldingLimitMs === undefined || typeof value.suggestedHoldingLimitMs === 'number' && HOLDING_LIMITS_MS.includes(value.suggestedHoldingLimitMs));
 }
 const configEqual = (a: DirectionConfig, b: DirectionConfig) => a.oiPct === b.oiPct && a.pricePct === b.pricePct
   && a.flowSharePct === b.flowSharePct && a.requireSpot === b.requireSpot;
@@ -39,7 +43,17 @@ function freshMark(value: unknown, position: ManualPosition, now: number): value
 function validPlan(value: unknown, position: ManualPosition): value is RiskPlanDraft {
   if (!record(value) || !positive(value.stopPrice) || !positive(value.takeProfitPrice)
     || !time(value.generatedAt) || value.generatedAt < position.createdAt || typeof value.signalWeakening !== 'boolean'
-    || !isDirectionConfig(value.directionConfig) || (value.method !== 'atr-example' && value.method !== 'manual')) return false;
+    || !isDirectionConfig(value.directionConfig) || !['atr-example', 'manual', 'structure-v1'].includes(value.method as string)) return false;
+  if (value.method === 'structure-v1') {
+    const advice = value.structure;
+    if (!validateStructureAdvice(advice) || advice.mode !== 'live' || advice.generatedAt !== value.generatedAt
+      || !['id', 'marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'createdAt', 'openedAt', 'suggestedHoldingLimitMs']
+        .every(key => advice.position[key as keyof ManualPosition] === position[key as keyof ManualPosition])
+      || value.stopPrice !== advice.stop.price || value.takeProfitPrice !== advice.target1.price
+      || value.trailing !== null || value.signalWeakening !== false
+      || typeof value.holdingLimitMs !== 'number' || !HOLDING_LIMITS_MS.includes(value.holdingLimitMs)
+      || new D(advice.additionalRisk).gte(position.margin)) return false;
+  } else if (value.structure !== undefined || value.holdingLimitMs !== undefined) return false;
   const stop = new D(value.stopPrice as string), target = new D(value.takeProfitPrice as string);
   if (position.side === 'long' ? stop.gte(target) : stop.lte(target)) return false;
   if (value.trailing === null) return true;
@@ -52,7 +66,8 @@ function planCopy(plan: RiskPlanDraft): RiskPlanDraft {
   return { stopPrice: new D(plan.stopPrice).toFixed(), takeProfitPrice: new D(plan.takeProfitPrice).toFixed(),
     trailing: plan.trailing ? { activationPrice: new D(plan.trailing.activationPrice).toFixed(), callbackPct: new D(plan.trailing.callbackPct).toFixed() } : null,
     signalWeakening: plan.signalWeakening, directionConfig: { oiPct: plan.directionConfig.oiPct, pricePct: plan.directionConfig.pricePct,
-      flowSharePct: plan.directionConfig.flowSharePct, requireSpot: plan.directionConfig.requireSpot }, method: plan.method, generatedAt: plan.generatedAt };
+      flowSharePct: plan.directionConfig.flowSharePct, requireSpot: plan.directionConfig.requireSpot }, method: plan.method, generatedAt: plan.generatedAt,
+    ...(plan.method === 'structure-v1' ? { structure: structuredClone(plan.structure!), holdingLimitMs: plan.holdingLimitMs! } : {}) };
 }
 const sameDraft = (a: RiskPlanDraft, b: RiskPlanDraft) => JSON.stringify(planCopy(a)) === JSON.stringify(planCopy(b));
 
@@ -72,6 +87,11 @@ export function validPositionState(value: unknown): value is PositionRiskState {
     && value.bestPrice === null && !value.trailingActive && !value.signalBaseline && value.weakWindows === 0 && value.lastSignalWindow === null;
   if (!validPlan(value.plan, value.position) || !record(value.plan) || !integer(value.plan.revision) || value.plan.revision < 1
     || !time(value.plan.confirmedAt) || value.plan.confirmedAt < value.plan.generatedAt || value.phase === 'draft' || value.lastMark === null) return false;
+  if (value.plan.method === 'structure-v1') {
+    const basis = value.position.openedAt === undefined ? 'adopted-at' : 'opened-at';
+    if (value.plan.timingBasis !== basis || !time(value.plan.deadlineAt)
+      || value.plan.deadlineAt !== (value.position.openedAt ?? value.plan.confirmedAt) + value.plan.holdingLimitMs!) return false;
+  } else if (value.plan.deadlineAt !== undefined || value.plan.timingBasis !== undefined || value.fired.includes('time-exit')) return false;
   if (value.phase === 'armed' && value.fired.length > 0 || value.phase === 'triggered' && value.fired.length === 0) return false;
   if (value.closedAt !== null && value.closedAt < value.plan.confirmedAt) return false;
   if (value.closedAt !== null && value.closedAt < value.lastMark.receivedAt) return false;
@@ -92,7 +112,9 @@ export function validPositionState(value: unknown): value is PositionRiskState {
 export function createPositionRisk(position: ManualPosition): PositionRiskState {
   if (!validPosition(position)) throw new Error('持仓输入无效：仅支持精确 USDT 合约、正数价格/保证金及1至125倍杠杆');
   return { position: { id: position.id, marketKey: position.marketKey, symbol: position.symbol, assetId: position.assetId,
-    side: position.side, entryPrice: position.entryPrice, margin: position.margin, leverage: position.leverage, createdAt: position.createdAt },
+    side: position.side, entryPrice: position.entryPrice, margin: position.margin, leverage: position.leverage, createdAt: position.createdAt,
+    ...(position.openedAt === undefined ? {} : { openedAt: position.openedAt }),
+    ...(position.suggestedHoldingLimitMs === undefined ? {} : { suggestedHoldingLimitMs: position.suggestedHoldingLimitMs }) },
     phase: 'draft', plan: null, lastMark: null, bestPrice: null,
     trailingActive: false, fired: [], signalBaseline: false, weakWindows: 0, lastSignalWindow: null, gap: false, closedAt: null };
 }
@@ -139,6 +161,15 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
     || previous.lastMark && command.now < previous.lastMark.receivedAt) return rejected('命令时间无效或倒退');
   const state = structuredClone(previous), events: PositionRiskEvent[] = [];
   const finish = (valuation: PositionValuation | null, error: string | null = null): PositionRiskResult => ({ state, valuation, events, error });
+  const emit = (rule: PositionRule, title: string, message: string, observation: MarkObservation, afterGap: boolean) => {
+    const plan = state.plan;
+    if (!plan || state.fired.includes(rule)) return;
+    const event: PositionRiskEvent = { id: `${state.position.id}:${plan.revision}:${rule}`, positionId: state.position.id,
+      planRevision: plan.revision, symbol: state.position.symbol, side: state.position.side, rule,
+      timestamp: command.now, sourceTime: observation.sourceTime, markPrice: observation.markPrice, title,
+      message: `${message}；仅提醒，未执行平仓${afterGap ? '；监控存在中断，恢复后检查，不代表期间已持续监控' : ''}`, afterGap };
+    state.fired.push(rule); state.phase = 'triggered'; events.push(event);
+  };
   if (command.type === 'close') {
     if (state.phase !== 'closed') { state.phase = 'closed'; state.closedAt = command.now; }
     return finish(null);
@@ -149,8 +180,14 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
     if (!integer(command.expectedPlanRevision) || command.expectedPlanRevision !== (state.plan?.revision ?? 0)) return rejected('方案版本已变化，请重新查看当前方案后确认');
     if (!validPlan(command.plan, state.position) || command.plan.generatedAt > command.now) return rejected('风险方案参数或生成时间无效');
     if (state.plan && sameDraft(state.plan, command.plan)) return finish(valuePosition(state.position, command.frame, command.now));
-    if (command.plan.method === 'atr-example' && command.now - command.plan.generatedAt >= RISK_PROPOSAL_TTL_MS)
+    if (command.plan.method !== 'manual' && command.now - command.plan.generatedAt >= RISK_PROPOSAL_TTL_MS)
       return rejected('这份建议已过期，请重新分析并核对新建议后采纳；原已启用计划保持不变');
+  }
+  // A clock deadline does not need a fresh quote. Never invent a current price while disconnected.
+  if (command.type === 'tick' && state.plan?.deadlineAt !== undefined && command.now >= state.plan.deadlineAt && state.lastMark) {
+    const interrupted = state.gap || !freshMark(command.frame?.mark, state.position, command.now)
+      || command.now - state.lastMark.receivedAt > 45_000;
+    emit('time-exit', '持有时限已到', `已到采纳方案的 ${state.plan.holdingLimitMs! / 60_000} 分钟截止时间，请检查仓位并考虑离场；价格字段为最后观测，不是当前可成交价`, state.lastMark, interrupted);
   }
   const mark = command.frame?.mark;
   if (!freshMark(mark, state.position, command.now)) {
@@ -172,7 +209,18 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
     const plan = planCopy(command.plan), stop = new D(plan.stopPrice), target = new D(plan.takeProfitPrice);
     if (state.position.side === 'long' ? price.lte(stop) || price.gte(target) : price.gte(stop) || price.lte(target))
       return rejected('当前标记价已到达或越过保护价/止盈价，请重新查看并修改方案');
+    if (plan.method === 'structure-v1') {
+      const risk = price.minus(stop).abs(), reward = target.minus(price).abs();
+      const quantity = new D(state.position.margin).mul(state.position.leverage).div(state.position.entryPrice);
+      if (reward.div(risk).lt('1.2') || risk.mul(quantity).gte(state.position.margin))
+        return rejected('价格已变化，剩余空间或保证金风险不再符合候选条件，请重新分析；原计划保持不变');
+      if (!time((state.position.openedAt ?? command.now) + plan.holdingLimitMs!)) return rejected('持有截止时间超出有效范围，未启用方案');
+    }
     state.plan = { ...plan, revision: (state.plan?.revision ?? 0) + 1, confirmedAt: command.now };
+    if (plan.method === 'structure-v1') {
+      state.plan.timingBasis = state.position.openedAt === undefined ? 'adopted-at' : 'opened-at';
+      state.plan.deadlineAt = (state.position.openedAt ?? command.now) + plan.holdingLimitMs!;
+    }
     state.phase = 'armed'; state.lastMark = { ...mark }; state.gap = false;
     state.bestPrice = null; state.trailingActive = false; state.fired = []; resetSignal(state);
     if (plan.trailing && (state.position.side === 'long' ? price.gte(plan.trailing.activationPrice) : price.lte(plan.trailing.activationPrice))) {
@@ -190,17 +238,14 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
   if (!state.plan) return finish(valuation);
   if (previousGap) resetSignal(state);
   const plan = state.plan;
-  const emit = (rule: PositionRule, title: string, message: string) => {
-    if (state.fired.includes(rule)) return;
-    const event: PositionRiskEvent = { id: `${state.position.id}:${plan.revision}:${rule}`, positionId: state.position.id,
-      planRevision: plan.revision, symbol: state.position.symbol, side: state.position.side, rule,
-      timestamp: command.now, sourceTime: mark.sourceTime, markPrice: price.toFixed(), title,
-      message: `${message}；仅提醒，未执行平仓${previousGap ? '；恢复监控后首次观察到满足条件，实际首次触发时间未知' : ''}`, afterGap: previousGap };
-    state.fired.push(rule); state.phase = 'triggered'; events.push(event);
-  };
+  const emitPrice = (rule: PositionRule, title: string, message: string) => emit(rule, title,
+    `${message}${previousGap ? '；恢复监控后首次观察到满足条件，实际首次触发时间未知' : ''}`, { ...mark, markPrice: price.toFixed() }, previousGap);
   const isLong = state.position.side === 'long';
-  if (isLong ? price.lte(plan.stopPrice) : price.gte(plan.stopPrice)) emit('stop', '保护价已触发', `标记价 ${price.toFixed()} 已到达保护价 ${plan.stopPrice}`);
-  if (isLong ? price.gte(plan.takeProfitPrice) : price.lte(plan.takeProfitPrice)) emit('take-profit', '止盈价已触发', `标记价 ${price.toFixed()} 已到达止盈价 ${plan.takeProfitPrice}`);
+  if (isLong ? price.lte(plan.stopPrice) : price.gte(plan.stopPrice)) emitPrice('stop', '保护价已触发', `标记价 ${price.toFixed()} 已到达保护价 ${plan.stopPrice}`);
+  if (isLong ? price.gte(plan.takeProfitPrice) : price.lte(plan.takeProfitPrice)) {
+    const label = plan.method === 'structure-v1' && new D(plan.structure!.target1.pnl).lt(0) ? '减亏目标' : '止盈价';
+    emitPrice('take-profit', `${label}已触发`, `标记价 ${price.toFixed()} 已到达${label} ${plan.takeProfitPrice}`);
+  }
   if (plan.trailing) {
     if (!state.trailingActive && (isLong ? price.gte(plan.trailing.activationPrice) : price.lte(plan.trailing.activationPrice))) {
       state.trailingActive = true; state.bestPrice = price.toFixed();
@@ -209,7 +254,7 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
       const best = new D(state.bestPrice!);
       state.bestPrice = (isLong ? D.max(best, price) : D.min(best, price)).toFixed();
       const line = new D(state.bestPrice).mul(new D(1).plus(new D(plan.trailing.callbackPct).div(100).mul(isLong ? -1 : 1)));
-      if (isLong ? price.lte(line) : price.gte(line)) emit('trailing', '移动保护已触发', `标记价已从观察到的最佳价 ${state.bestPrice} 回撤 ${plan.trailing.callbackPct}%`);
+      if (isLong ? price.lte(line) : price.gte(line)) emitPrice('trailing', '移动保护已触发', `标记价已从观察到的最佳价 ${state.bestPrice} 回撤 ${plan.trailing.callbackPct}%`);
     }
   }
   if (plan.signalWeakening && !state.fired.includes('signal-weakening')) {
@@ -221,7 +266,7 @@ export function stepPositionRisk(previous: PositionRiskState, command: PositionR
         if (signal.bias === state.position.side) { state.signalBaseline = true; state.weakWindows = 0; }
         else if (state.signalBaseline) {
           state.weakWindows = contiguous ? Math.min(2, state.weakWindows + 1) : 1;
-          if (state.weakWindows >= 2) emit('signal-weakening', '持仓方向信号减弱', '连续两个有效闭合分钟窗口不再支持原持仓方向；不是确定反转或平仓指令');
+          if (state.weakWindows >= 2) emitPrice('signal-weakening', '持仓方向信号减弱', '连续两个有效闭合分钟窗口不再支持原持仓方向；不是确定反转或平仓指令');
         }
         state.lastSignalWindow = signal.windowEnd;
       }

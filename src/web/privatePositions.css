@@ -45,6 +45,13 @@
 .advice-followup p { margin:6px 0; overflow-wrap:anywhere; }
 .advice-wait { padding:12px 0; font-size:13px; line-height:1.8; }
 .advice-wait p,.advice-wait small { color:var(--muted); }
+.advice-mode { display:flex; gap:6px; margin-top:18px; flex-wrap:wrap; }
+.advice-mode button { padding:8px 12px; border-radius:6px; font-size:12px; color:var(--muted); }
+.advice-mode button[aria-pressed="true"] { background:var(--blue-soft); color:var(--blue); font-weight:600; }
+.advice-holding { display:flex; align-items:center; gap:10px; margin-top:16px; font-size:13px; }
+.advice-holding select { padding:7px 10px; border:1px solid var(--border); border-radius:5px; background:#fff; color:var(--text); font:inherit; }
+.private-deadline { margin-top:14px; font-size:12px; line-height:1.8; color:var(--muted); overflow-wrap:anywhere; }
+.private-form-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
 .position-advice .private-form-footer { flex-wrap:wrap; }
 .position-advice .private-actions { flex-wrap:wrap; }
 .plan-grid { grid-template-columns:repeat(2,minmax(0,1fr)); max-width:700px; }
@@ -77,3 +84,8 @@
 .risk-event-kind.advisory { color:#8d6319; background:#fff8e9; }
 @media(max-width:850px) { .private-form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.private-values { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }.private-section-heading { align-items:flex-start; }.private-form-footer { align-items:flex-start; flex-direction:column; gap:14px; } }
 @media(max-width:600px) { .market-subnav { padding:10px 12px; gap:0; }.market-subnav button { font-size:12px; padding:7px 10px; }.private-workspace { padding:0 12px 24px; }.private-position,.position-entry { padding:15px; }.private-position.has-trigger { padding-left:12px; }.private-position .private-section-heading { flex-direction:column; }.private-values strong { font-size:19px; }.private-values { gap:18px 10px; }.private-position-title { gap:8px; }.risk-plan-editor { padding:13px; }.private-actions { flex-wrap:wrap; }.private-close-row { flex-wrap:wrap; }.position-popup-stack { right:16px; bottom:16px; }.risk-event-list > article { flex-wrap:wrap; gap:10px; padding:15px; }.risk-event-list article > div { flex-basis:calc(100% - 80px); }.risk-event-list article > button { margin-left:auto; }.risk-tabs button { padding:8px 9px; font-size:12px; }.private-form-grid input { font-size:16px; } }
+.entry-popup-stack { right: auto; left: 20px; max-height: 40vh; overflow-y: auto; }
+@media (max-width: 700px) {
+  .position-popup-stack { max-height: 35vh; overflow-y: auto; }
+  .position-popup-stack.entry-popup-stack { top: 76px; bottom: auto; left: 12px; right: 12px; max-height: 35vh; }
+}

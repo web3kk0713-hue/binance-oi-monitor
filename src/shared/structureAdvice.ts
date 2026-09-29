@@ -27,7 +27,9 @@ function validPosition(value: unknown): value is ManualPosition {
     && value.marketKey === `futures:${value.symbol}` && typeof value.assetId === 'string'
     && /^[A-Za-z0-9:_-]{1,120}$/.test(value.assetId) && (value.side === 'long' || value.side === 'short')
     && positive(value.entryPrice) !== null && positive(value.margin) !== null
-    && leverage !== null && leverage.gte(1) && leverage.lte(125) && time(value.createdAt);
+    && leverage !== null && leverage.gte(1) && leverage.lte(125) && time(value.createdAt)
+    && (value.openedAt === undefined || time(value.openedAt) && value.openedAt <= value.createdAt)
+    && (value.suggestedHoldingLimitMs === undefined || [1_800_000, 3_600_000, 7_200_000, 14_400_000].includes(value.suggestedHoldingLimitMs as number));
 }
 function validCandle(value: unknown): value is StructureCandle {
   if (!record(value) || !time(value.openTime) || value.openTime % STRUCTURE_INTERVAL_MS !== 0
@@ -103,7 +105,7 @@ function trend(candles: StructureCandle[], interval: StructureTrend['interval'],
 }
 const unavailable = (code: Extract<StructureResult, { status: 'unavailable' }>['code'], reason: string): StructureResult => ({ status: 'unavailable', code, reason });
 
-/** Research-only proposal. It deliberately cannot be adopted by the formal position-risk state machine. */
+/** Experimental structure proposal. A separate validated, opt-in adapter creates a reminder plan. */
 export function proposeStructureAdvice(input: StructureInput): StructureResult {
   if (!record(input) || !validPosition(input.position) || !time(input.now) || !['live', 'replay'].includes(input.mode)
     || input.position.createdAt > input.now || !record(input.reference)) return unavailable('invalid', '持仓、参考价格或分析时间无效，未生成候选方案');
@@ -151,7 +153,7 @@ export function proposeStructureAdvice(input: StructureInput): StructureResult {
     pnl: pnl(value).toFixed(), returnOnMarginPct: pnl(value).div(position.margin).mul(100).toFixed() });
   const secondPrice = opposing[1] ? targetPrice(opposing[1]) : null;
   const target2 = secondPrice && secondPrice.gt(0) && secondPrice.minus(firstPrice).mul(side).gt(0) ? level(opposing[1], secondPrice) : null;
-  const warnings = ['研究候选，未经充分历史与影子验证；不替换已启用的提醒，也不自动交易。',
+  const warnings = ['试验规则，未经充分盈利验证；重新分析不替换已采纳计划，须明确采纳后才启用新的提醒，不自动交易。',
     '未确认个人风险预算；盈亏按手动录入仓位估算，未计手续费、滑点和资金费，不是账户权益或强平价。',
     '摆动点需左右各 2 根 15 分钟 K 线确认，至少有 30 分钟确认延迟；支撑压力可能失效。',
     '5m／15m／1h／4h 仅显示已收盘价格背景，彼此相关，不是独立方向投票。',
@@ -160,7 +162,9 @@ export function proposeStructureAdvice(input: StructureInput): StructureResult {
   if (risk.mul(quantity).gte(position.margin)) warnings.push('从参考价到止损的额外估算损失已达到或超过录入保证金；本模型不能判断途中是否强平。');
   const advice: StructureAdvice = { version: 'structure-v1', mode,
     position: { id: position.id, marketKey: position.marketKey, symbol: position.symbol, assetId: position.assetId, side: position.side,
-      entryPrice: position.entryPrice, margin: position.margin, leverage: position.leverage, createdAt: position.createdAt },
+      entryPrice: position.entryPrice, margin: position.margin, leverage: position.leverage, createdAt: position.createdAt,
+      ...(position.openedAt === undefined ? {} : { openedAt: position.openedAt }),
+      ...(position.suggestedHoldingLimitMs === undefined ? {} : { suggestedHoldingLimitMs: position.suggestedHoldingLimitMs }) },
     generatedAt: now, asOf, referencePrice: price.toFixed(), tickSize: tick.toFixed(), historyFrom: candles[0].openTime, historyTo: candles.at(-1)!.closeTime,
     atr15: atr.toFixed(), buffer: buffer.toFixed(), quantity: quantity.toFixed(), currentPnl: pnl(price).toFixed(),
     additionalRisk: risk.mul(quantity).toFixed(), additionalRiskPct: risk.mul(quantity).div(position.margin).mul(100).toFixed(),

@@ -1,0 +1,54 @@
+.market-plan { margin: 0 16px 16px; padding: 16px 0; border-top: 1px solid #e3e6eb; border-bottom: 1px solid #e3e6eb; color: #1d1d1f; }
+.market-plan-heading, .market-plan-actions, .market-watch-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.market-plan h3, .market-watches h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.market-plan-heading small, .market-plan-caption, .market-plan-method, .market-watch-meta { color: #68717d; font-size: 11px; line-height: 1.65; }
+.market-plan-heading small { display: block; margin-top: 4px; }
+.market-plan-boundary { margin: 8px 0 12px; color: #895e1b; font-size: 12px; line-height: 1.6; }
+.market-plan-controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.market-plan-controls label, .market-fill-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #596576; }
+.market-plan-controls select, .market-fill-grid input { border: 1px solid #ccd3dd; border-radius: 5px; background: #fff; color: #1d1d1f; min-height: 36px; padding: 7px 9px; font: inherit; }
+.market-plan-controls select:focus-visible, .market-fill-grid input:focus-visible, .market-plan button:focus-visible, .market-watches button:focus-visible, .market-plan summary:focus-visible, .market-watches summary:focus-visible { outline: 2px solid #0875e1; outline-offset: 3px; }
+.market-plan-empty { margin: 10px 0; color: #68717d; font-size: 12px; line-height: 1.7; }
+.market-plan-prices { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 16px; margin: 16px 0 12px; }
+.market-plan-prices > div { min-width: 0; }
+.market-plan-prices dt { color: #68717d; font-size: 12px; margin-bottom: 5px; }
+.market-plan-prices dd { margin: 0; font-size: 19px; font-weight: 600; line-height: 1.35; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.market-plan-prices .market-plan-entry dd { color: #0875e1; }
+.market-plan-timing { display: flex; gap: 8px 20px; flex-wrap: wrap; margin: 10px 0 14px; color: #596576; font-size: 12px; line-height: 1.6; }
+.market-plan-actions { margin: 12px 0 0; }
+.market-plan-actions p { flex: 1 1 220px; margin: 0; color: #68717d; font-size: 11px; line-height: 1.65; }
+.market-plan-method { margin-top: 12px; }
+.market-plan-method summary { cursor: pointer; width: fit-content; }
+.market-plan-method p { margin: 8px 0 0; max-width: 80ch; }
+.market-plan-method ul { margin: 8px 0; padding-left: 18px; }
+.market-plan-error { margin: 10px 0; color: #b42336; font-size: 12px; line-height: 1.6; }
+.market-plan-success { color: #12664f; font-size: 12px; line-height: 1.65; margin: 10px 0; }
+.market-plan-success a, .market-watch-meta a { color: #0875e1; }
+.market-watches { margin-top: 16px; }
+.market-watches > h3 { margin-bottom: 10px; }
+.market-watch { padding: 12px 0; border-top: 1px solid #e3e6eb; }
+.market-watch-heading strong { font-size: 13px; font-weight: 600; }
+.market-watch-phase { display: inline-block; margin-left: 9px; font-size: 11px; color: #68717d; font-weight: 400; }
+.market-watch-phase.ready { color: #12664f; }
+.market-watch-phase.invalidated, .market-watch-phase.expired { color: #895e1b; }
+.market-watch-reason { margin: 7px 0; color: #596576; font-size: 12px; line-height: 1.65; }
+.market-watch .market-plan-prices { margin: 12px 0; }
+.market-watch .market-plan-prices dd { font-size: 15px; }
+.market-watch-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.market-fill { margin: 12px 0 0; padding: 14px; border: 1px solid #dce4ee; border-radius: 6px; background: #fbfcfe; }
+.market-fill h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.market-fill-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.market-fill-grid input { min-width: 0; width: 100%; }
+.market-fill .market-plan-boundary { margin: 8px 0; }
+@media (max-width: 700px) {
+  .market-plan { margin-left: 14px; margin-right: 14px; }
+  .market-plan-prices { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
+  .market-plan-entry { grid-column: 1 / -1; }
+  .market-plan-prices dd { font-size: 18px; }
+  .market-plan-controls { align-items: stretch; }
+  .market-plan-controls label { flex: 1 1 120px; }
+  .market-plan-controls > button { flex: 1 1 100%; }
+  .market-fill { padding: 12px; }
+  .market-fill-grid { grid-template-columns: 1fr; }
+  .market-watch-heading { align-items: flex-start; }
+}

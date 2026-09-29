@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import { POSITION_THRESHOLDS, type PositionContext } from '../shared/positionContext';
 import { selectFlowContext, type FlowContextRow } from '../shared/flowContext';
 import type { FlowSnapshot } from '../shared/flowTypes';
@@ -8,6 +8,8 @@ import { DirectionPanel } from './DirectionPanel';
 import { useDirectionSettings } from './DirectionSettingsContext';
 import { MetricHelp } from './MetricHelp';
 import './position.css';
+
+const MarketPlanPanel = lazy(() => import('./MarketPlanPanel'));
 
 const valueClass = (value: number | null) => value === null || value === 0 ? '' : value > 0 ? 'change-up' : 'change-down';
 const observed = (item: PositionContext) => item.pattern !== 'quiet' && item.pattern !== 'unavailable';
@@ -48,6 +50,9 @@ export function PositionPanel({ value, flow, now, assetId, preferredMarketKey, r
       <div className="position-heading-state">{value && !loading ? <PositionBadge value={value}/> : <span className="position-badge unavailable">{loading ? '读取起点' : '等待数据'}</span>}<small>{value ? `${value.windowMinutes}m · ${clockTime(value.endAt)}` : '尚无观测'}</small></div></div>
     {replay ? <p className="position-visible-warning">以下是当前快照，不是所选历史事件的触发证据。</p> : null}
     <DirectionPanel value={direction} replay={replay}/>
+    <Suspense fallback={<p className="position-context-note">加载进场计划…</p>}>
+      <MarketPlanPanel marketKey={preferredMarketKey ?? direction.marketKey} assetId={selectedAssetId} replay={replay}/>
+    </Suspense>
     <div className="position-primary">
       <div><span>OI 数量变化<MetricHelp label="OI 数量变化">OI 是尚未平仓的合约数量。这里将同币种合约按倍率归一后求和，比较所选窗口起止值；上涨表示未平仓数量增加，不等于净资金流入或多头增加。</MetricHelp></span><strong className={valueClass(value?.oiQuantityPct ?? null)}>{signed(value?.oiQuantityPct ?? null, '%', 3)}</strong><small>归一化币数量，不含价格涨跌</small></div>
       <div><span>价格变化<MetricHelp label="价格变化">与 OI 比较同一对快照的指数价格：（终点 ÷ 起点 − 1）×100%。这是窗口净变化，不代表中间一直上涨或下跌。</MetricHelp></span><strong className={valueClass(value?.pricePct ?? null)}>{signed(value?.pricePct ?? null, '%', 3)}</strong><small>同一对快照端点 · 指数价格</small></div>

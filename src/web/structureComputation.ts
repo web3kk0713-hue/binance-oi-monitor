@@ -37,7 +37,7 @@ function validOutput(value: unknown, request: StructureComputationRequest): valu
   const advice = result.advice, position = advice.position;
   if (advice.version !== 'structure-v1' || advice.mode !== request.input.mode || advice.generatedAt !== request.input.now
     || advice.asOf !== request.input.reference.sourceTime || !object(position)
-    || !['id', 'marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'createdAt'].every(key => position[key] === request.input.position[key as keyof StructureInput['position']])) return false;
+    || !['id', 'marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'createdAt', 'openedAt', 'suggestedHoldingLimitMs'].every(key => position[key] === request.input.position[key as keyof StructureInput['position']])) return false;
   if (!['referencePrice', 'tickSize', 'atr15', 'buffer', 'quantity', 'currentPnl', 'additionalRisk', 'additionalRiskPct', 'remainingRewardRisk'].every(key => decimal(advice[key]))
     || !positiveTime(advice.historyFrom) || !positiveTime(advice.historyTo)) return false;
   const level = (item: unknown) => object(item) && ['price', 'structurePrice', 'pnl', 'returnOnMarginPct'].every(key => decimal(item[key])) && positiveTime(item.confirmedAt);

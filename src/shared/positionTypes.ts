@@ -1,9 +1,14 @@
 import type { DirectionConfig } from './directionConfig';
+import type { StructureAdvice } from './structureTypes';
 
 /** Private, manually declared linear USDT positions. Never part of public market snapshots. */
 export interface ManualPosition {
   id: string; marketKey: string; symbol: string; assetId: string; side: 'long' | 'short';
   entryPrice: string; margin: string; leverage: string; createdAt: number;
+  /** Actual exchange fill time entered by the user; absent in legacy records. */
+  openedAt?: number;
+  /** Carries the reviewed market-plan preference only; no reminder is armed by this field. */
+  suggestedHoldingLimitMs?: number;
 }
 export interface MarkObservation {
   marketKey: string; markPrice: string; sourceTime: number; receivedAt: number;
@@ -18,10 +23,16 @@ export interface RiskPlanDraft {
   stopPrice: string; takeProfitPrice: string;
   trailing: { activationPrice: string; callbackPct: string } | null;
   signalWeakening: boolean; directionConfig: DirectionConfig;
-  method: 'atr-example' | 'manual'; generatedAt: number;
+  method: 'atr-example' | 'manual' | 'structure-v1'; generatedAt: number;
+  structure?: StructureAdvice;
+  holdingLimitMs?: number;
 }
-export interface ConfirmedRiskPlan extends RiskPlanDraft { revision: number; confirmedAt: number; }
-export type PositionRule = 'stop' | 'take-profit' | 'trailing' | 'signal-weakening';
+export interface ConfirmedRiskPlan extends RiskPlanDraft {
+  revision: number; confirmedAt: number;
+  /** Frozen at adoption. Reanalysis must not move an active deadline. */
+  deadlineAt?: number; timingBasis?: 'opened-at' | 'adopted-at';
+}
+export type PositionRule = 'stop' | 'take-profit' | 'trailing' | 'signal-weakening' | 'time-exit';
 export interface PositionRiskEvent {
   id: string; positionId: string; planRevision: number; symbol: string; side: 'long' | 'short';
   rule: PositionRule; timestamp: number; sourceTime: number; markPrice: string;

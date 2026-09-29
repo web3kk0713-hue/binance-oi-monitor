@@ -1,9 +1,26 @@
 import Decimal from 'decimal.js';
 import { isDirectionConfig, type DirectionConfig } from './directionConfig';
-import { proposeRiskPlan, valuePosition } from './positionRisk';
+import { HOLDING_LIMITS_MS, proposeRiskPlan, RISK_PROPOSAL_TTL_MS, valuePosition } from './positionRisk';
+import { validateStructureAdvice } from './structureReplay';
 import type { ManualPosition, PositionMarketFrame, RiskPlanDraft } from './positionTypes';
+import type { StructureAdvice } from './structureTypes';
 
 const D = Decimal.clone({ precision: 80 });
+
+/** Explicit bridge from a frozen live structure proposal to opt-in price/time reminders. */
+export function proposeStructureRiskPlan(position: ManualPosition, advice: StructureAdvice, config: DirectionConfig,
+  now: number, holdingLimitMs = position.suggestedHoldingLimitMs ?? 4 * 3_600_000): { plan: RiskPlanDraft | null; error: string | null } {
+  const reject = (error: string) => ({ plan: null, error });
+  if (!validateStructureAdvice(advice) || advice.mode !== 'live' || !isDirectionConfig(config)
+    || !Number.isSafeInteger(now) || now <= 0 || !HOLDING_LIMITS_MS.includes(holdingLimitMs)) return reject('结构方案或持有上限无效，未启用提醒');
+  if (!['id', 'marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'createdAt', 'openedAt', 'suggestedHoldingLimitMs']
+    .every(key => advice.position[key as keyof ManualPosition] === position[key as keyof ManualPosition])) return reject('结构方案与当前持仓不一致，请重新分析');
+  if (now < advice.generatedAt || now - advice.generatedAt >= RISK_PROPOSAL_TTL_MS) return reject('结构建议已过期，请重新分析；原计划保持不变');
+  if (new D(advice.additionalRisk).gte(position.margin)) return reject('到保护价的额外估算损失已达到录入保证金，不能采纳；请先在交易所核查强平风险');
+  return { plan: { stopPrice: advice.stop.price, takeProfitPrice: advice.target1.price, trailing: null,
+    signalWeakening: false, directionConfig: { ...config }, method: 'structure-v1', generatedAt: advice.generatedAt,
+    structure: structuredClone(advice), holdingLimitMs }, error: null };
+}
 export interface PositionAdvice {
   plan: RiskPlanDraft;
   referencePrice: string;

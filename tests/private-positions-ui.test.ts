@@ -12,9 +12,12 @@ import type { usePrivatePositions } from '../src/web/PrivatePositionsContext';
 const mock = vi.hoisted(() => ({ runtime: null as unknown, flow: { data: { events: [] as unknown[] }, error: null as string | null } }));
 vi.mock('../src/web/PrivatePositionsContext', () => ({ usePrivatePositions: () => mock.runtime }));
 vi.mock('../src/web/FlowMonitorContext', () => ({ useSharedFlowMonitor: () => mock.flow }));
+vi.mock('../src/web/MarketPlansContext', () => ({ useMarketPlans: () => ({ book: { watches: [], events: [] } }) }));
 import MyPositions from '../src/web/MyPositions';
 import RiskAlertCenter from '../src/web/RiskAlertCenter';
-import { AdviceDetails, PositionAdvicePanel } from '../src/web/PositionAdvicePanel';
+import { AdviceDetails, AtrPositionAdvicePanel as PositionAdvicePanel, PositionAdvicePanel as DefaultPositionAdvicePanel, StructureRiskDetails } from '../src/web/PositionAdvicePanel';
+import { structureFixture } from './structure-fixture';
+import { proposeStructureAdvice } from '../src/shared/structureAdvice';
 
 type Runtime = ReturnType<typeof usePrivatePositions>;
 const NOW = Date.UTC(2026, 8, 25, 12);
@@ -43,7 +46,7 @@ function runtime(states: PositionRiskState[] = [], events: PositionRiskEvent[] =
   return { book, loaded: true, error: '', now: NOW, frames,
     adviceFrameFor: vi.fn(p => frames.get(p.id) ?? { mark: null, atr: null, signal: null }),
     issues: new Map(), markets: [], config: { ...DEFAULT_DIRECTION_CONFIG }, popups: [],
-    add: vi.fn(async () => '00000000-0000-4000-8000-000000000001' as const), confirm: vi.fn(async () => {}), close: vi.fn(async () => {}), dismiss: vi.fn(), ...changes };
+    add: vi.fn(async () => '00000000-0000-4000-8000-000000000001' as const), addFromEntry: vi.fn(async () => 'entry-test'), confirm: vi.fn(async () => {}), close: vi.fn(async () => {}), dismiss: vi.fn(), ...changes };
 }
 const renderPositions = () => renderToStaticMarkup(createElement(MyPositions));
 const riskProps = () => ({ alerts: [] as AlertEvent[], onPosition: vi.fn(), onAsset: vi.fn<(id: string) => void>(),
@@ -162,7 +165,7 @@ describe('manual-position page status and trust boundaries', () => {
   });
 });
 
-describe('system-generated advice is read-only until explicit adoption', () => {
+describe('explicit legacy volatility advice is read-only until adoption', () => {
   function completeFrame(markPrice = '100'): PositionMarketFrame {
     return { ...frame(markPrice), atr: { marketKey: 'futures:TESTUSDT', value: '2', asOf: NOW, lastCandleAt: NOW - 1000 } };
   }
@@ -262,12 +265,39 @@ describe('system-generated advice is read-only until explicit adoption', () => {
   });
 });
 
+describe('default structure advice presentation', () => {
+  it('defaults to structure loading and never enables an ATR plan implicitly', () => {
+    const state = createPositionRisk(position()); mock.runtime = runtime([state]);
+    const html = renderToStaticMarkup(createElement(DefaultPositionAdvicePanel, { state, onDone: vi.fn() }));
+    expect(html).toContain('历史结构方案'); expect(html).toContain('旧版波动方案');
+    expect(html).toContain('正在读取原始历史 K 线'); expect(html).toContain('未经盈利验证');
+    expect(html).toContain('最长持有'); expect(html).toContain('从采纳时开始计 240 分钟');
+    expect(html).not.toContain('同合约15根闭合1分钟');
+    expect(html).toMatch(/<button[^>]*class="button primary"[^>]*disabled=""/);
+  });
+  it('shows a single target, non-execution limitation and cost caveats', () => {
+    const proposal = proposeStructureAdvice(structureFixture());
+    if (proposal.status !== 'ready') throw new Error(proposal.reason);
+    const html = renderToStaticMarkup(createElement(StructureRiskDetails, { advice: proposal.advice }));
+    expect(html).toContain('97.5'); expect(html).toContain('105.5');
+    expect(html).toContain('退出全部剩余仓位'); expect(html).toContain('提醒不等于已成交');
+    expect(html).toContain('不自动转追第二目标'); expect(html).toContain('未扣成本，不是胜率');
+    expect(html).toContain('至少30分钟确认延迟');
+  });
+  it('preserves the market-plan holding choice instead of silently resetting to four hours', () => {
+    const state = createPositionRisk(position({ suggestedHoldingLimitMs: 1_800_000 })); mock.runtime = runtime([state]);
+    const html = renderToStaticMarkup(createElement(DefaultPositionAdvicePanel, { state, onDone: vi.fn() }));
+    expect(html).toContain('从采纳时开始计 30 分钟');
+    expect(html).toContain('<option value="30" selected="">');
+  });
+});
+
 describe('risk center historical-event semantics', () => {
   it('shows a private empty state and separate market/valuation categories', () => {
     const html = renderRisks();
-    expect(html).toContain('暂无持仓触线记录'); expect(html).toContain('前往我的持仓');
-    expect(html).toContain('本机记录，关页后不监控。触发提醒不代表已经平仓。');
-    expect(html).toContain('持仓触线'); expect(html).toContain('市场异常'); expect(html).toContain('OI / FDV');
+    expect(html).toContain('暂无持仓退出记录'); expect(html).toContain('前往我的持仓');
+    expect(html).toContain('本机记录，关页后不监控。触发提醒不代表已成交或已平仓。');
+    expect(html).toContain('持仓退出'); expect(html).toContain('市场异常'); expect(html).toContain('OI / FDV');
   });
   it('includes event identity, plan revision and gap context without running a callback', () => {
     const result = triggered(21_000); mock.runtime = runtime([result.state], result.events);
@@ -286,7 +316,7 @@ describe('risk center historical-event semantics', () => {
   it('does not mix public market events into the default private risk list', () => {
     mock.flow.data.events = [{ id: 'public', title: 'PUBLIC_EVENT_MUST_NOT_BECOME_PRIVATE' }];
     const html = renderRisks(); expect(html).toContain('市场异常 <span>1</span>');
-    expect(html).not.toContain('PUBLIC_EVENT_MUST_NOT_BECOME_PRIVATE'); expect(html).toContain('暂无持仓触线记录');
+    expect(html).not.toContain('PUBLIC_EVENT_MUST_NOT_BECOME_PRIVATE'); expect(html).toContain('暂无持仓退出记录');
   });
   it('surfaces storage errors without claiming an empty log proves safety', () => {
     mock.runtime = runtime([], [], { error: '提醒存储暂不可用；请检查交易所仓位' });

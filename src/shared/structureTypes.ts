@@ -1,6 +1,6 @@
 import type { ManualPosition, MarkObservation } from './positionTypes';
 
-/** Research-only contracts. Deliberately NOT assignable to RiskPlanDraft. */
+/** Closed-candle structure proposals; explicit opt-in conversion is required before price/time reminders. */
 export const STRUCTURE_INTERVAL_MS = 300_000;
 export const STRUCTURE_LOOKBACK_MS = 7 * 86_400_000;
 export interface StructureCandle {

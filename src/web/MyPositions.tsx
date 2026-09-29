@@ -3,7 +3,7 @@ import Decimal from 'decimal.js';
 import { valuePosition } from '../shared/positionRisk';
 import type { PositionRiskState } from '../shared/positionTypes';
 import { usePrivatePositions } from './PrivatePositionsContext';
-import { clockTime } from './format';
+import { clockTime, dateTime } from './format';
 import './privatePositions.css';
 import { MetricHelp } from './MetricHelp';
 
@@ -23,13 +23,19 @@ function PositionEntry({ onSaved, onCancel }: { onSaved: (id: string) => void; o
   const runtime = usePrivatePositions();
   const [symbol, setSymbol] = useState(''), [side, setSide] = useState<'long' | 'short'>('long');
   const [entryPrice, setEntry] = useState(''), [margin, setMargin] = useState(''), [leverage, setLeverage] = useState('');
+  const [openedTime, setOpenedTime] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); if (busy) return; setError('');
     const market = runtime.markets.find(m => m.symbol === symbol.trim().toUpperCase());
     if (!market) { setError('从目录选择完整合约代码，例如 BTCUSDT。'); return; }
     setBusy(true);
-    try { const id = await runtime.add({ marketKey: market.key, symbol: market.symbol, assetId: market.assetId, side, entryPrice, margin, leverage }); onSaved(id); }
+    try {
+      const openedAt = openedTime ? new Date(openedTime).getTime() : undefined;
+      if (openedAt !== undefined && (!Number.isSafeInteger(openedAt) || openedAt <= 0 || openedAt > Date.now())) throw new Error('实际开仓时间不能晚于现在，请核对本机时间。');
+      const id = await runtime.add({ marketKey: market.key, symbol: market.symbol, assetId: market.assetId, side, entryPrice, margin, leverage,
+        ...(openedAt === undefined ? {} : { openedAt }) }); onSaved(id);
+    }
     catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   return <form className="position-entry" onSubmit={submit} aria-label="录入手工持仓">
@@ -38,7 +44,8 @@ function PositionEntry({ onSaved, onCancel }: { onSaved: (id: string) => void; o
       <label>方向<select value={side} onChange={e => setSide(e.target.value as 'long' | 'short')}><option value="long">做多</option><option value="short">做空</option></select></label>
       <label>开仓价<input type="number" step="any" min="0" aria-label="开仓价" value={entryPrice} onChange={e => setEntry(e.target.value)} required/></label>
       <label>开仓保证金 · USDT<MetricHelp label="开仓保证金">填这笔仓位开仓时占用的保证金，不是账户总余额。本页按保证金×杠杆÷开仓价估算数量，加减仓或调整保证金后需重新核对。</MetricHelp><input type="number" step="any" min="0" aria-label="开仓保证金 USDT" value={margin} onChange={e => setMargin(e.target.value)} required/></label>
-      <label>开仓杠杆 · 倍<MetricHelp label="杠杆">5×表示本页估算名义仓位为输入保证金的5倍。收益和亏损都会相对保证金放大；这里只做估算，不计算交易所强平价。</MetricHelp><input type="number" step="any" min="1" max="125" aria-label="开仓杠杆" value={leverage} onChange={e => setLeverage(e.target.value)} required/></label></div>
+      <label>开仓杠杆 · 倍<MetricHelp label="杠杆">5×表示本页估算名义仓位为输入保证金的5倍。收益和亏损都会相对保证金放大；这里只做估算，不计算交易所强平价。</MetricHelp><input type="number" step="any" min="1" max="125" aria-label="开仓杠杆" value={leverage} onChange={e => setLeverage(e.target.value)} required/></label>
+      <label>实际开仓时间 · 选填<MetricHelp label="实际开仓时间">填写交易所实际成交时间，按本机时区输入。填写后持有上限从此时计算；留空则从采纳结构方案开始计时，不把录入时间冒充成交时间。</MetricHelp><input type="datetime-local" aria-label="实际开仓时间" value={openedTime} onChange={e => setOpenedTime(e.target.value)}/></label></div>
     <div className="private-form-footer"><span>系统给出离场建议，你采纳后才提醒。</span><button className="button primary" disabled={busy || !runtime.loaded}>{busy ? '分析中…' : '分析我的仓位'}</button></div>
     {error ? <p className="private-error" role="alert">{error}</p> : null}
   </form>;
@@ -67,6 +74,10 @@ export default function MyPositions() {
         <div className={`private-feed-status ${!valuation ? 'warning' : ''}`}>{state.phase === 'draft' ? '提醒尚未启用' : freshness}{state.gap && valuation ? ' · 曾中断，仅按恢复后观测判断' : ''}{valuation && frame?.mark ? ` · ${clockTime(frame.mark.sourceTime)}` : ''}</div>
         <div className="private-values"><div><span>估算浮盈亏 · USDT<MetricHelp label="估算浮盈亏">数量估算=开仓保证金×杠杆÷开仓价。多单盈亏=数量×(标记价−开仓价)，空单反向；不含手续费、资金费和滑点，不是交易所结算记录。</MetricHelp></span><strong className={valuation && new Decimal(valuation.pnl).isNegative() ? 'change-down' : 'change-up'}>{number(valuation?.pnl, 2)}</strong><small>相对输入保证金<MetricHelp label="相对输入保证金收益率">估算浮盈亏÷输入的开仓保证金×100%。不是价格涨跌幅，也不等于已实现收益或账户总收益率。</MetricHelp> {number(valuation?.returnOnMarginPct, 2)}%</small></div><div><span>标记价 / 开仓价<MetricHelp label="标记价">币安发布的该合约参考价格，本页用于浮盈亏和触线提醒。不是最新成交价，也不是保证能成交的价格。</MetricHelp></span><strong>{number(valuation?.markPrice, 8)}</strong><small>开仓 {number(state.position.entryPrice, 8)}</small></div><div><span>输入保证金 · USDT</span><strong>{number(state.position.margin, 2)}</strong><small>估算数量 {number(valuation?.quantity, 8)}</small></div><div><span>保护价 / 止盈价</span><strong>{number(state.plan?.stopPrice, 8)}</strong><small>止盈 {number(state.plan?.takeProfitPrice, 8)}</small></div></div>
         {state.plan?.trailing ? <p className="private-trailing">移动保护{state.trailingActive ? `已激活 · 已观察最佳价 ${number(state.bestPrice, 8)}` : `等待激活价 ${number(state.plan.trailing.activationPrice, 8)}`} · 回撤 {number(state.plan.trailing.callbackPct, 6)}%</p> : null}
+        {state.plan?.method === 'structure-v1' ? <p className={`private-deadline ${runtime.now >= state.plan.deadlineAt! ? 'advice-caution' : ''}`}>
+          结构试验规则 · 单目标建议退出 · {state.plan.timingBasis === 'opened-at' ? '从实际开仓计时' : '从采纳计时'} · 截止 {dateTime(state.plan.deadlineAt!)}
+          {runtime.now >= state.plan.deadlineAt! ? ' · 已到期，请检查仓位' : ` · 剩余约 ${Math.ceil((state.plan.deadlineAt! - runtime.now) / 60_000)} 分钟`}
+        </p> : null}
         {state.fired.length ? <div className="private-trigger-summary">{runtime.book.events.filter(e => e.positionId === state.position.id && e.planRevision === state.plan?.revision).map(e => <p key={e.id}><strong>{e.title}</strong> · {e.message}</p>)}</div> : null}
         {editing === state.position.id ? <PositionAdvicePanel key={state.position.id} state={state} onDone={() => setEditing(null)}/> : null}
         <button className="button text-button" type="button" aria-expanded={researching === state.position.id} onClick={() => setResearching(researching === state.position.id ? null : state.position.id)}>{researching === state.position.id ? '收起结构验证' : '结构验证 · 历史回放'}</button>

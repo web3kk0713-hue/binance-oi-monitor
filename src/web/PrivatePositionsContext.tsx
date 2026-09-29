@@ -9,6 +9,7 @@ import { useSharedFlowMonitor } from './FlowMonitorContext';
 import { claimPositionNotifications, emptyPositionBook, finishPositionNotification, readPositionBook, updatePositionBook } from './positionBook';
 import { notificationSupport, registerNotifications } from './notifications';
 import { readSettings, type Settings } from './storage';
+import { entryPositionId } from '../shared/entryWatch';
 
 function usePositionBookRuntime(snapshot: Snapshot | null, settings: Settings) {
   const flow = useSharedFlowMonitor(), { config } = useDirectionSettings();
@@ -83,6 +84,25 @@ function usePositionBookRuntime(snapshot: Snapshot | null, settings: Settings) {
       return { ...current, positions: [state, ...current.positions] };
     })); return position.id;
   }, [accept]);
+  // Durable entry-fill intent can be retried after a crash without duplicating a real position.
+  // This is a user-reported fill, never an exchange order or an automatic risk-plan adoption.
+  const addFromEntry = useCallback(async (planId: string, input: Omit<ManualPosition, 'id' | 'createdAt'>) => {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(planId)) throw new Error('进场计划编号无效。');
+    const id = entryPositionId(planId), at = Date.now();
+    const state = createPositionRisk({ ...input, id, createdAt: at });
+    accept(await updatePositionBook(current => {
+      const existing = current.positions.find(item => item.position.id === id);
+      if (existing) {
+        if (!(['marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'openedAt', 'suggestedHoldingLimitMs'] as const)
+          .every(key => existing.position[key] === input[key])) throw new Error('该计划已登记不同成交信息，请检查我的持仓。');
+        return current;
+      }
+      if (current.positions.filter(p => p.phase !== 'closed').length >= 50 || current.positions.length >= 100)
+        throw new Error('本机持仓记录已达上限，成交登记尚未完成，请检查交易所仓位。');
+      return { ...current, positions: [state, ...current.positions] };
+    }, at));
+    return id;
+  }, [accept]);
   const confirm = useCallback(async (id: string, plan: RiskPlanDraft, expectedPlanRevision: number) => {
     const at = Date.now();
     accept(await updatePositionBook(current => {
@@ -106,7 +126,7 @@ function usePositionBookRuntime(snapshot: Snapshot | null, settings: Settings) {
     return { at, frames, issues };
   }, [book.positions, now, flow.data, snapshot, frameFor]);
   const markets = useMemo(() => (flow.data?.rows ?? []).filter(row => row.market.venue === 'futures' && row.market.quoteAsset === 'USDT').map(row => row.market).sort((a, b) => a.symbol.localeCompare(b.symbol)), [flow.data]);
-  return { book, loaded, error, now: observed.at, frames: observed.frames, adviceFrameFor, issues: observed.issues, markets, config, add, confirm, close, popups,
+  return { book, loaded, error, now: observed.at, frames: observed.frames, adviceFrameFor, issues: observed.issues, markets, config, add, addFromEntry, confirm, close, popups,
     dismiss: (id: string) => setPopups(previous => previous.filter(event => event.id !== id)) };
 }
 type Runtime = ReturnType<typeof usePositionBookRuntime>;

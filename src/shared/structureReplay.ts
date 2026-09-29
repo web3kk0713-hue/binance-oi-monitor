@@ -14,17 +14,20 @@ function number(v: unknown, positive = false): Decimal | null {
   if (typeof v !== 'string' || v.length > 128 || !/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v)) return null;
   try { const n = new D(v); return n.isFinite() && Math.abs(n.e) <= 100 && (!positive || n.gt(0)) ? n : null; } catch { return null; }
 }
-function validAdvice(v: unknown): v is StructureAdvice {
+export function validateStructureAdvice(v: unknown): v is StructureAdvice {
   if (!object(v) || !keys(v, ['version', 'mode', 'position', 'generatedAt', 'asOf', 'referencePrice', 'tickSize', 'historyFrom', 'historyTo',
     'atr15', 'buffer', 'quantity', 'currentPnl', 'additionalRisk', 'additionalRiskPct', 'remainingRewardRisk', 'stop', 'target1', 'target2', 'trends', 'reasons', 'warnings'])
     || v.version !== 'structure-v1' || !['live', 'replay'].includes(v.mode as string) || !object(v.position)) return false;
   const p = v.position;
-  if (!keys(p, ['id', 'marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'createdAt'])
+  if (!keys(p, ['id', 'marketKey', 'symbol', 'assetId', 'side', 'entryPrice', 'margin', 'leverage', 'createdAt',
+    ...(Object.hasOwn(p, 'openedAt') ? ['openedAt'] : []), ...(Object.hasOwn(p, 'suggestedHoldingLimitMs') ? ['suggestedHoldingLimitMs'] : [])])
     || typeof p.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(p.id)
     || typeof p.symbol !== 'string' || !/^[A-Z0-9_]{1,36}USDT$/.test(p.symbol) || p.marketKey !== `futures:${p.symbol}`
     || typeof p.assetId !== 'string' || !/^[A-Za-z0-9:_-]{1,120}$/.test(p.assetId) || !['long', 'short'].includes(p.side as string)
     || !number(p.entryPrice, true) || !number(p.margin, true) || !number(p.leverage, true)?.gte(1) || !number(p.leverage, true)?.lte(125)
-    || !time(p.createdAt) || !time(v.generatedAt) || !time(v.asOf) || v.asOf > v.generatedAt || p.createdAt > v.asOf
+    || !time(p.createdAt) || p.openedAt !== undefined && (!time(p.openedAt) || p.openedAt > p.createdAt)
+    || p.suggestedHoldingLimitMs !== undefined && ![1_800_000, 3_600_000, 7_200_000, 14_400_000].includes(p.suggestedHoldingLimitMs as number)
+    || !time(v.generatedAt) || !time(v.asOf) || v.asOf > v.generatedAt || p.createdAt > v.asOf
     || v.mode === 'live' && v.generatedAt - v.asOf > FRESH_MS
     || !time(v.historyFrom) || !time(v.historyTo) || v.historyFrom % STRUCTURE_INTERVAL_MS !== 0
     || v.historyTo !== v.historyFrom + STRUCTURE_LOOKBACK_MS - 1 || v.historyTo > v.asOf || v.asOf - v.historyTo >= STRUCTURE_INTERVAL_MS) return false;
@@ -77,7 +80,7 @@ function crossed(advice: StructureAdvice, rule: StructureTouch['rule'], price: s
 }
 function validShadow(v: unknown): v is StructureShadow {
   if (!object(v) || !keys(v, ['id', 'advice', 'startedAt', 'stoppedAt', 'lastMark', 'gap', 'touches'])
-    || typeof v.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(v.id) || !validAdvice(v.advice) || v.advice.mode !== 'live'
+    || typeof v.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(v.id) || !validateStructureAdvice(v.advice) || v.advice.mode !== 'live'
     || !time(v.startedAt) || v.startedAt < v.advice.generatedAt || v.startedAt - v.advice.generatedAt >= DRAFT_MS
     || !(v.stoppedAt === null || time(v.stoppedAt) && v.stoppedAt >= v.startedAt) || typeof v.gap !== 'boolean'
     || !validMark(v.lastMark, v.advice.position.marketKey) || v.lastMark.sourceTime < v.advice.asOf
@@ -106,7 +109,7 @@ function validShadow(v: unknown): v is StructureShadow {
 export function replayStructureAdvice(advice: StructureAdvice, history: StructureHistory, horizonMs = 4 * 3_600_000): StructureReplay {
   const result = (outcome: StructureReplay['outcome'], observedTo: number, bars: number, reason: string, touchedAt: number | null = null): StructureReplay =>
     ({ outcome, touchedAt, observedTo, bars, reason });
-  if (!validAdvice(advice)) return result('incomplete', 0, 0, '方案无效，未进行回放');
+  if (!validateStructureAdvice(advice)) return result('incomplete', 0, 0, '方案无效，未进行回放');
   if (!Number.isSafeInteger(horizonMs) || horizonMs < STRUCTURE_INTERVAL_MS || horizonMs > STRUCTURE_LOOKBACK_MS || horizonMs % STRUCTURE_INTERVAL_MS !== 0)
     return result('incomplete', advice.asOf, 0, '回放时长无效');
   if (!validateStructureHistory(history) || history.marketKey !== advice.position.marketKey || history.symbol !== advice.position.symbol
@@ -130,7 +133,7 @@ export function replayStructureAdvice(advice: StructureAdvice, history: Structur
 
 /** Starting a local shadow record never adopts a formal risk plan or sends a notification. */
 export function startStructureShadow(id: string, advice: StructureAdvice, reference: MarkObservation, now: number): StructureShadow {
-  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || !validAdvice(advice) || advice.mode !== 'live'
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || !validateStructureAdvice(advice) || advice.mode !== 'live'
     || !time(now) || now < advice.generatedAt || now - advice.generatedAt >= DRAFT_MS
     || !validMark(reference, advice.position.marketKey) || reference.receivedAt > now || now - reference.sourceTime > FRESH_MS
     || reference.sourceTime < advice.asOf || crossed(advice, 'stop', reference.markPrice) || crossed(advice, 'target1', reference.markPrice))

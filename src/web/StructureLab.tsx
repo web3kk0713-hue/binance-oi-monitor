@@ -1,6 +1,6 @@
 import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import Decimal from 'decimal.js';
-import { createStructureHistoryClient } from '../data/structureHistory';
+import { structureHistoryClient as historyClient } from './structureResources';
 import { STRUCTURE_INTERVAL_MS, STRUCTURE_LOOKBACK_MS, type StructureAdvice, type StructureHistory, type StructureLevel, type StructureResult, type StructureReplay } from '../shared/structureTypes';
 import type { MarkObservation, PositionRiskState } from '../shared/positionTypes';
 import { usePrivatePositions } from './PrivatePositionsContext';
@@ -11,7 +11,6 @@ import { dateTime, signed } from './format';
 import { createStructureComputationClient } from './structureComputation';
 import './structureLab.css';
 
-const historyClient = createStructureHistoryClient();
 const StructureChart = lazy(() => import('./StructureChart'));
 type Tab = 'current' | 'replay' | 'records';
 const errorText = (e: unknown) => e instanceof Error ? e.message : '暂时不可用，请稍后重试。';
@@ -110,7 +109,8 @@ export default function StructureLab({ state, recordsOnly = false }: { state: Po
     const candle = history.candles[replayCursor]; if (!candle) return;
     const at = candle.closeTime + 1;
     let disposed = false; setReplayBusy(true);
-    void computer.current.analyze({ position: { ...position, entryPrice: candle.close, createdAt: at }, history,
+    void computer.current.analyze({ position: { ...position, entryPrice: candle.close, createdAt: at,
+      ...(position.openedAt === undefined ? {} : { openedAt: at }) }, history,
       reference: { marketKey: history.marketKey, markPrice: candle.close, sourceTime: at, receivedAt: at, source: 'binance-premium-rest' },
       now: Date.now(), mode: 'replay' }, horizon * 3_600_000).then(({ result, replay }) => {
       if (!disposed) { setReplayResult({ cursor: replayCursor, horizon, result, outcome: replay }); setComputeError(''); }
