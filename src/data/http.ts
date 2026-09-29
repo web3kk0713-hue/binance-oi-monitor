@@ -10,7 +10,7 @@ const governors = new WeakMap<typeof fetch, Governor>();
 const GOVERNOR_KEY = 'oi-monitor:v1:source-budget:v1';
 export function binanceRequestWeight(url: URL): number {
   const limit = Number(url.searchParams.get('limit') ?? 500);
-  if (url.pathname === '/fapi/v1/klines') return limit < 100 ? 1 : limit < 500 ? 2 : limit <= 1000 ? 5 : 10;
+  if (['/fapi/v1/klines', '/fapi/v1/markPriceKlines'].includes(url.pathname)) return limit < 100 ? 1 : limit < 500 ? 2 : limit <= 1000 ? 5 : 10;
   if (url.pathname === '/fapi/v1/depth') return limit <= 50 ? 2 : limit <= 100 ? 5 : limit <= 500 ? 10 : 20;
   return !url.searchParams.has('symbol') && ['/fapi/v1/premiumIndex', '/fapi/v1/assetIndex'].includes(url.pathname) ? 10 : 1;
 }

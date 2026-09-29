@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { lazy, Suspense, useState, type FormEvent } from 'react';
 import Decimal from 'decimal.js';
 import { valuePosition } from '../shared/positionRisk';
 import type { PositionRiskState } from '../shared/positionTypes';
@@ -6,6 +6,8 @@ import { usePrivatePositions } from './PrivatePositionsContext';
 import { clockTime } from './format';
 import './privatePositions.css';
 import { MetricHelp } from './MetricHelp';
+
+const StructureLab = lazy(() => import('./StructureLab'));
 import { PositionAdvicePanel } from './PositionAdvicePanel';
 
 const number = (value: string | undefined | null, places = 4) => {
@@ -45,6 +47,7 @@ function PositionEntry({ onSaved, onCancel }: { onSaved: (id: string) => void; o
 
 export default function MyPositions() {
   const runtime = usePrivatePositions(), [adding, setAdding] = useState(false), [editing, setEditing] = useState<string | null>(null);
+  const [researching, setResearching] = useState<string | null>(null);
   const [closeId, setCloseId] = useState<string | null>(null), [error, setError] = useState('');
   const open = runtime.book.positions.filter(s => s.phase !== 'closed'), closed = runtime.book.positions.filter(s => s.phase === 'closed');
   async function close(id: string) { try { await runtime.close(id); setCloseId(null); setError(''); } catch (e) { setError(errorText(e)); } }
@@ -66,9 +69,11 @@ export default function MyPositions() {
         {state.plan?.trailing ? <p className="private-trailing">移动保护{state.trailingActive ? `已激活 · 已观察最佳价 ${number(state.bestPrice, 8)}` : `等待激活价 ${number(state.plan.trailing.activationPrice, 8)}`} · 回撤 {number(state.plan.trailing.callbackPct, 6)}%</p> : null}
         {state.fired.length ? <div className="private-trigger-summary">{runtime.book.events.filter(e => e.positionId === state.position.id && e.planRevision === state.plan?.revision).map(e => <p key={e.id}><strong>{e.title}</strong> · {e.message}</p>)}</div> : null}
         {editing === state.position.id ? <PositionAdvicePanel key={state.position.id} state={state} onDone={() => setEditing(null)}/> : null}
+        <button className="button text-button" type="button" aria-expanded={researching === state.position.id} onClick={() => setResearching(researching === state.position.id ? null : state.position.id)}>{researching === state.position.id ? '收起结构验证' : '结构验证 · 历史回放'}</button>
+        {researching === state.position.id ? <Suspense fallback={<p className="private-note">加载结构验证…</p>}><StructureLab key={state.position.id} state={state}/></Suspense> : null}
         <div className="private-close-row">{closeId === state.position.id ? <><span>仅标记记录已离场，不会向交易所下单。</span><button className="button danger-button" onClick={() => void close(state.position.id)}>确认已在交易所离场</button><button className="button text-button" onClick={() => setCloseId(null)}>取消</button></> : <button className="button text-button" onClick={() => setCloseId(state.position.id)}>我已离场</button>}</div>
       </article>;
     })}</section>
-    {closed.length ? <details className="private-closed"><summary>已标记离场 · {closed.length} 笔</summary>{closed.map(state => <p key={state.position.id}>{state.position.symbol} · {sideLabel(state)} · {clockTime(state.closedAt)} 手工标记；未核实交易所成交</p>)}</details> : null}
+    {closed.length ? <details className="private-closed"><summary>已标记离场 · {closed.length} 笔</summary>{closed.map(state => <div key={state.position.id}><p>{state.position.symbol} · {sideLabel(state)} · {clockTime(state.closedAt)} 手工标记；未核实交易所成交</p><button className="button text-button" type="button" aria-expanded={researching === state.position.id} onClick={() => setResearching(researching === state.position.id ? null : state.position.id)}>{researching === state.position.id ? '收起验证记录' : '查看验证记录'}</button>{researching === state.position.id ? <Suspense fallback={<p>读取验证记录…</p>}><StructureLab key={state.position.id} state={state} recordsOnly/></Suspense> : null}</div>)}</details> : null}
   </main>;
 }
