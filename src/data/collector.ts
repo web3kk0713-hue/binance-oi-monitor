@@ -1,7 +1,7 @@
 import Decimal from 'decimal.js';
 import { COLLECTION_INTERVAL_MS, type AssetRow, type Collector, type CollectorOptions, type ContractEvidence, type Snapshot, type SourceStamp, type SupplyEvidence } from '../shared/types';
 import { IDENTITY_OVERRIDES, UNIT_ALIASES } from './aliases';
-import { createSourceClient } from './http';
+import { createSourceClient, SourceError } from './http';
 
 const BINANCE = 'https://fapi.binance.com';
 const CG = 'https://api.coingecko.com/api/v3';
@@ -89,6 +89,9 @@ export function createCollector(options: CollectorOptions = {}): Collector {
   const supplies = new Map<string, Supply>();
   const identities = new Map<string, Identity>();
   let nextSupplyAttempt = 0;
+  let geckoRetryAt = 0;
+  let geckoFailures = 0;
+  let nextGeckoId: string | undefined;
   let supplyUniverseKey = '';
   let supplyProblems: string[] = [];
   let inFlight: Promise<Snapshot> | undefined;
@@ -116,12 +119,29 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     }
   }
 
+  function pauseGecko(error: unknown, signal: AbortSignal, problems: string[]): boolean {
+    // A spent round budget is not an upstream outage. The next scheduled round may resume.
+    if (signal.aborted) return true;
+    const code = error instanceof SourceError ? error.code : '';
+    const refused = ['HTTP_401', 'HTTP_403', 'HTTP_451'].includes(code);
+    const limitedUntil = Math.max(error instanceof SourceError ? error.retryAt : 0, request.retryAt('api.coingecko.com'));
+    // One failure ends this round's CoinGecko work. Repeated whole-source failures get
+    // progressively less traffic; successful market batches reset this backoff.
+    geckoFailures = Math.min(geckoFailures + 1, 4);
+    const delay = refused ? 5 * MINUTE : Math.min(2 ** (geckoFailures - 1), 5) * MINUTE;
+    geckoRetryAt = Math.max(Date.now() + delay, limitedUntil);
+    nextSupplyAttempt = Math.max(nextSupplyAttempt, geckoRetryAt);
+    problems.push(`COINGECKO_RETRY: 供应量源${refused ? '拒绝访问' : '暂不可用'}，下次尝试不早于 ${new Date(geckoRetryAt).toISOString()}；Binance OI 采集继续`);
+    // Never probe around explicit access refusals or an upstream rate-limit window.
+    return !refused && limitedUntil <= Date.now();
+  }
+
   async function loadSupply(contracts: Contract[], signal: AbortSignal, errors: string[]) {
     const groups = new Map<string, Contract[]>();
     for (const contract of contracts) groups.set(contract.baseAsset, [...groups.get(contract.baseAsset) ?? [], contract]);
     const universeKey = [...groups.keys()].sort().join('|');
     // A refreshed listing directory must not inherit another asset's hourly metadata delay.
-    if (universeKey !== supplyUniverseKey) { supplyUniverseKey = universeKey; nextSupplyAttempt = 0; }
+    if (universeKey !== supplyUniverseKey) { supplyUniverseKey = universeKey; nextSupplyAttempt = geckoRetryAt; }
     if (Date.now() < nextSupplyAttempt) { errors.push(...supplyProblems); return; }
     // A failed provider is retried at most once per minute; successful supply is retained with its real timestamps.
     nextSupplyAttempt = Date.now() + MINUTE;
@@ -139,6 +159,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     }
     const headers = key ? { 'X-CMC_PRO_API_KEY': key } : undefined;
     const cmcPrefix = key ? CMC : `${CMC}/public-api`;
+    let geckoStopped = false;
 
     try {
       if ([...groups.keys()].some(base => !IDENTITY_OVERRIDES[base])) {
@@ -161,7 +182,11 @@ export function createCollector(options: CollectorOptions = {}): Collector {
           identities.set(base, { symbol: alias?.symbol ?? base, geckoId: alias?.geckoId ?? providerId, multiplier: alias?.multiplier ?? 1, url: CG_MAPPING_URL, mapping: `CoinGecko Binance 合约 ${ticks.map(t => t.symbol).join(',')} → ${providerId}${alias ? ` → ${alias.geckoId}; 单位倍率 ${alias.multiplier}; ${alias.evidence}` : ''}` });
         }
       }
-    } catch (error) { problems.push(`COINGECKO_IDENTITY: ${message(error)}`); }
+    } catch (error) {
+      problems.push(`COINGECKO_IDENTITY: ${message(error)}`);
+      pauseGecko(error, signal, problems);
+      geckoStopped = true;
+    }
     const unresolved = [...groups.keys()].filter(base => !identities.has(base));
     if (unresolved.length) problems.push(`COINGECKO_IDENTITY_PARTIAL: ${unresolved.length}/${groups.size} 个资产缺少可核实映射，最多每 5 分钟重验；不按同名猜测`);
 
@@ -194,7 +219,12 @@ export function createCollector(options: CollectorOptions = {}): Collector {
       const fallback = identity?.geckoId ? supplies.get(`cg:${identity.geckoId}`) : undefined;
       return identity?.geckoId && (!preferred || !supplyFresh(preferred)) && (!fallback || Date.now() - fallback.evidence.fetchedAt >= SUPPLY_REFRESH) ? [identity.geckoId] : [];
     }))];
-    for (const ids of geckoBatches(missing)) {
+    const batches = geckoBatches(missing);
+    const firstBatch = Math.max(0, batches.findIndex(ids => nextGeckoId !== undefined && ids.includes(nextGeckoId)));
+    for (let offset = 0; offset < batches.length && !geckoStopped && !signal.aborted; offset++) {
+      const index = (firstBatch + offset) % batches.length;
+      const ids = batches[index]!;
+      const followingId = batches[(index + 1) % batches.length]?.[0];
       const url = geckoMarketUrl(ids);
       try {
         const rows = await request<GeckoMarket[]>(url, signal);
@@ -205,8 +235,17 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         }
         const returned = new Set(rows.map(row => row.id));
         const absent = ids.filter(id => !returned.has(id));
+        if (ids.some(id => returned.has(id))) { geckoFailures = 0; geckoRetryAt = 0; }
+        nextGeckoId = followingId;
         if (absent.length) problems.push(`COINGECKO_SUPPLY_PARTIAL: ${absent.length}/${ids.length} 个请求的资产未返回供应量，下轮仅补取缺失项`);
-      } catch (error) { problems.push(`COINGECKO_SUPPLY: ${message(error)}`); break; }
+      } catch (error) {
+        problems.push(`COINGECKO_SUPPLY: ${message(error)}`);
+        // Rotate only after a recoverable batch failure, and only on a later attempt.
+        // Thus a bad first batch cannot starve the tail, while a whole-host outage
+        // produces at most one failed market request per backoff window.
+        nextGeckoId = pauseGecko(error, signal, problems) ? followingId : ids[0];
+        break;
+      }
     }
     // Each successful asset retains its own refresh deadline after a partial batch recovers.
     const nextCachedRefresh = Math.min(Date.now() + SUPPLY_REFRESH, ...[...groups.keys()].flatMap(base => {

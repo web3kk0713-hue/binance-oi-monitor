@@ -75,7 +75,7 @@ describe('market plan presentation and identity (SSR, not browser interaction ac
   it('renders a compact exact-decimal price plan and explicitly frozen confirmation rule', () => {
     const html = renderToStaticMarkup(createElement(MarketPlanPrices, { plan: plan() })) + renderToStaticMarkup(createElement(MarketPlanRules, { plan: plan() }));
     expect(html).toContain('99.2 – 100.1'); expect(html).toContain('97.5'); expect(html).toContain('105.5');
-    expect(html).toContain('结束时间晚于采纳时刻的新 5m 窗口'); expect(html).toContain('不是仅触价提醒');
+    expect(html).toContain('窗口结束时间须晚于采纳时刻'); expect(html).toContain('不是固定再等 5 分钟'); expect(html).toContain('不是仅触价提醒');
     expect(html).toContain('往返 12 bps'); expect(html).toContain('成本假设不保证');
   });
   it('does not fetch or compute before an explicit analysis action; defaults holding to 240 minutes', () => {
@@ -95,7 +95,7 @@ describe('market plan presentation and identity (SSR, not browser interaction ac
   it('requires an explicit side while direction is wait', () => {
     mock.flow!.rows[0].oiChange5m = 0;
     const html = renderToStaticMarkup(createElement(MarketPlanPanel, { marketKey: market.key }));
-    expect(html).toContain('当前方向未确认'); expect(html).toContain('仍须等待新的 5m 确认');
+    expect(html).toContain('当前方向未确认'); expect(html).toContain('仍须最新 5 分钟数据确认');
     expect(html).toMatch(/<option value="" selected="">选择做多或做空<\/option>/);
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>分析进场计划<\/button>/);
   });
@@ -134,6 +134,12 @@ describe('market plan presentation and identity (SSR, not browser interaction ac
     const html = renderToStaticMarkup(createElement(MarketPlanCandidate, { plan: plan(), adopting: false, onAdopt: vi.fn() }));
     expect(html).not.toContain('候选已过期');
     expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>采纳并开始条件观察<\/button>/);
+  });
+  it('separates entry-observation expiry from the post-fill exit-check limit', () => {
+    const html = renderToStaticMarkup(createElement(MarketPlanCandidate, { plan: plan(), adopting: false, onAdopt: vi.fn() }));
+    expect(html).toContain('进场观察截止'); expect(html).toContain('生成后 30 分钟');
+    expect(html).toContain('成交后最晚复查离场 240 分钟'); expect(html).toContain('不要求持满');
+    expect(html).toContain('记录成交后仍需采纳离场建议');
   });
   it('uses current render time for direction and fresh mark status, not provider publication time', () => {
     mock.now = NOW - 5000; mock.watches = [watch()];

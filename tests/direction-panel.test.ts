@@ -14,7 +14,7 @@ describe('visible directional advice', () => {
   it('keeps direction, missing confirmation, reason and withdrawal visible before disclosure', () => {
     const html = renderToStaticMarkup(createElement(DirectionPanel, { value: result }));
     const primary = html.split('<details')[0];
-    for (const text of ['偏多候选', '固定 5m', '同合约5分钟增仓上涨', '待现货确认', '不宜直接开仓', '撤销条件', '数据过期即退回观望', '未回测盈利能力']) expect(primary).toContain(text);
+    for (const text of ['偏多候选', '多空参考 · 固定 5 分钟', '同合约5分钟增仓上涨', '待现货确认', '不宜直接开仓', '撤销条件', '数据过期即退回观望', '未回测盈利能力']) expect(primary).toContain(text);
     expect(html).toContain('不是止损价或自动平仓');
   });
   it('does not turn a replay into an event-time recommendation', () => {

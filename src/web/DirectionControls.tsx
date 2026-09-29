@@ -40,12 +40,13 @@ export function DirectionControls() {
   const { config, apply, notice, revision } = useDirectionSettings();
   const preset = directionPreset(config);
   return <section className="direction-controls" aria-label="多空建议灵敏度">
-    <div className="direction-controls-heading"><h2>方向筛选 <span>固定 5m</span><MetricHelp label="方向筛选">灵敏、标准、严格只改变候选门槛，不改变更新速度。按同一合约最近完整 5m 的 OI、价格、主动成交共同判断；所有档位均未经胜率验证，不是自动买卖策略。</MetricHelp></h2>
+    <div className="direction-controls-heading"><h2>多空参考 <span>固定 5 分钟</span><MetricHelp label="多空参考">灵敏、标准、严格只改变方向候选门槛，不改变变化命中或行情更新速度。使用同一合约最近 5 根已收盘的 1 分钟 K 线，以及 OI、主动成交共同判断；所有档位均未经胜率验证，不是自动买卖策略。</MetricHelp></h2>
       <div className="direction-presets" role="group" aria-label="方向预设档位">{([
         ['sensitive', '灵敏', '候选更多'], ['standard', '标准', '当前默认'], ['strict', '严格', '门槛更高'],
       ] as const).map(([key, label, hint]) => <button key={key} type="button" title={hint} aria-pressed={preset === key} onClick={() => apply(DIRECTION_PRESETS[key])}>{label}</button>)}</div>
       <p className="direction-active-rule"><strong>{DIRECTION_LABELS[preset]}</strong><span>OI ≥ +{config.oiPct}%<MetricHelp label="方向 OI 门槛">同一合约 5m 的原始未平仓数量至少增长此比例。排除价格影响，不代表买入资金或新增多仓。</MetricHelp></span><span>价格 ± &gt; {config.pricePct}%<MetricHelp label="方向价格门槛">最近完整 5m 价格上涨超过门槛才考虑偏多，下跌超过门槛才考虑偏空；仍须 OI、成交等其他条件同时满足。</MetricHelp></span><span>主动成交 ≥ {config.flowSharePct}%<MetricHelp label="同向主动成交门槛">偏多看主动买额占比，偏空看主动卖额占比。例如 60% 门槛：做多需买额≥60%，做空需卖额≥60%（买额≤40%）；不是胜率。</MetricHelp></span></p>
       <span className="direction-config-caution">实验性 · 非下单指令</span></div>
+    <p className="direction-scope-note">只影响方向建议，不影响变化命中。</p>
     <details className="direction-custom"><summary>自定义参数与说明</summary><CustomDirectionForm key={revision} config={config} onApply={apply}/><p className="direction-config-note">{config.requireSpot ? '必须现货同向。' : '缺现货可列待确认候选。'}灵敏档更易误报，所有档位均未验证胜率；数据过期、缺失或现货反向仍会观望。设置两页共用，保存在当前浏览器；不改变采集速度。</p></details>
     {notice ? <p className="direction-save-state" role="status">{notice}</p> : null}
   </section>;

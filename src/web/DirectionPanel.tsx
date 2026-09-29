@@ -16,7 +16,7 @@ export function DirectionBadge({ value, detail = false }: { value: DirectionAsse
 export function DirectionPanel({ value, replay = false }: { value: DirectionAssessment; replay?: boolean }) {
   const config = value.config;
   return <section className={`direction-panel ${value.bias}`} aria-label="当前5分钟多空建议">
-    <div className="direction-heading"><div><span>固定 5m · {config ? DIRECTION_LABELS[directionPreset(config)] : '参数无效'}</span><h3>{value.bias === 'long' ? '↗ ' : value.bias === 'short' ? '↘ ' : ''}{value.label}<MetricHelp label="多空候选">偏多或偏空表示实验性筛选条件暂时同时满足，不代表胜率或立即开仓。观望表示条件、确认或数据质量不足；数据过期会撤销候选。</MetricHelp></h3></div>
+    <div className="direction-heading"><div><span>多空参考 · 固定 5 分钟 · {config ? DIRECTION_LABELS[directionPreset(config)] : '参数无效'}</span><h3>{value.bias === 'long' ? '↗ ' : value.bias === 'short' ? '↘ ' : ''}{value.label}<MetricHelp label="多空候选">独立于变化比较时间，不影响变化命中。偏多或偏空表示实验性筛选条件暂时同时满足，不代表胜率或立即开仓。观望表示条件、确认或数据质量不足；数据过期会撤销候选。</MetricHelp></h3></div>
       <div className="direction-meta"><strong>{value.confirmation}</strong><small>{value.symbol ?? '等待合约'} · 更新 {clockTime(value.asOf)}</small></div></div>
     <p className="direction-reason">{value.reason}</p>
     <div className="direction-guardrails"><p><strong>撤销条件</strong>{value.invalidation}</p></div>

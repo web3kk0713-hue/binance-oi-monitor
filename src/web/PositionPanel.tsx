@@ -24,7 +24,7 @@ export function PositionHighlights({ rows, windowMinutes, loading, onSelect }: {
     || Math.abs(b.oiQuantityPct ?? 0) - Math.abs(a.oiQuantityPct ?? 0)), [rows]);
   const comparable = rows.filter(row => row.pattern !== 'unavailable').length;
   return <section className={`position-watch ${candidates.length ? 'has-observations' : ''}`} aria-label="持仓联动重点观察">
-    <div className="position-watch-title"><strong>持仓联动观察 <span>{loading ? '…' : candidates.length}</span></strong><small>过去 {windowMinutes}m · {loading ? '读取比较起点' : `${comparable} / ${rows.length} 可比较`}</small></div>
+    <div className="position-watch-title"><strong>持仓联动观察 <span>{loading ? '…' : candidates.length}</span></strong><small>过去 {windowMinutes} 分钟变化 · {loading ? '读取比较起点' : `${comparable} / ${rows.length} 可比较`}</small></div>
     <div className="position-watch-items">{!loading && candidates.slice(0, 5).map(row => <button key={row.assetId} onClick={() => onSelect(row.assetId)}><strong>{row.symbol}</strong><span>{row.label}</span><b className={valueClass(row.oiQuantityPct)}>OI {signed(row.oiQuantityPct)}</b></button>)}
       {!candidates.length || loading ? <span className="position-watch-empty">{loading ? '校验真实历史，暂不显示旧结果' : !comparable ? '历史不足或源数据无效，暂不能判断联动' : '当前没有达到联动观察门槛的标的'}</span> : null}</div>
     <details className="position-watch-method"><summary>观察口径</summary><p>数量 OI |变化| ≥ {POSITION_THRESHOLDS.oiPct}%；“价格近乎不变”指 |变化| ≤ {POSITION_THRESHOLDS.flatPricePct}%。观察标签，不是买卖指令。</p></details>
@@ -32,7 +32,7 @@ export function PositionHighlights({ rows, windowMinutes, loading, onSelect }: {
 }
 
 function TradeContext({ row, venue }: { row: FlowContextRow | null; venue: string }) {
-  return <div className="position-flow-cell"><span>{venue}主动买额占比 · 5m<MetricHelp label={`${venue}主动买额占比`}>最近 5 根已闭合 1m：主动买入成交额 ÷ 总成交额 × 100%。51% 表示主动买额占 51%、主动卖额占 49%，接近中性、略偏买；不是人数、多仓比例、胜率或净流入，每笔成交都有买卖双方，不能单独据此开仓。</MetricHelp></span><strong>{percent(row?.buyShare5m)}</strong>
+  return <div className="position-flow-cell"><span>{venue}主动买额占比 · 近 5 分钟<MetricHelp label={`${venue}主动买额占比`}>独立使用最近 5 根已收盘的 1 分钟 K 线，不随变化比较时间改变：主动买入成交额 ÷ 总成交额 × 100%。51% 表示主动买额占 51%、主动卖额占 49%，接近中性、略偏买；不是人数、多仓比例、胜率或净流入，每笔成交都有买卖双方，不能单独据此开仓。</MetricHelp></span><strong>{percent(row?.buyShare5m)}</strong>
     <small>{row ? <>{row.symbol} · 净主动成交 {quoteNumber(row.delta5m)} {row.quoteAsset}<MetricHelp label={`${venue}净主动成交`}>同一完整 5m 的主动买入额 − 主动卖出额。正值是主动买额较大，不代表资金净流入，也不直接区分开仓和平仓。</MetricHelp></> : '尚无已核实市场数据'}</small>
     <small>{row?.buyShare5m != null ? `价格 ${signed(row.priceChange5m)} · ${clockTime(row.asOf)}` : row?.reason ?? '选择标的后采集，缺失不补零'}</small></div>;
 }
@@ -47,12 +47,13 @@ export function PositionPanel({ value, flow, now, assetId, preferredMarketKey, r
   const funding = context.futures;
   return <section className="position-panel" aria-label="当前标的持仓与价格联动">
     <div className="position-heading"><div><h2>{value?.symbol ?? '等待标的'}<small>市场持仓联动 · 非个人持仓</small></h2></div>
-      <div className="position-heading-state">{value && !loading ? <PositionBadge value={value}/> : <span className="position-badge unavailable">{loading ? '读取起点' : '等待数据'}</span>}<small>{value ? `${value.windowMinutes}m · ${clockTime(value.endAt)}` : '尚无观测'}</small></div></div>
+      <div className="position-heading-state">{value && !loading ? <PositionBadge value={value}/> : <span className="position-badge unavailable">{loading ? '读取起点' : '等待数据'}</span>}<small>{value ? `过去 ${value.windowMinutes} 分钟变化 · ${clockTime(value.endAt)}` : '尚无观测'}</small></div></div>
     {replay ? <p className="position-visible-warning">以下是当前快照，不是所选历史事件的触发证据。</p> : null}
     <DirectionPanel value={direction} replay={replay}/>
     <Suspense fallback={<p className="position-context-note">加载进场计划…</p>}>
       <MarketPlanPanel marketKey={preferredMarketKey ?? direction.marketKey} assetId={selectedAssetId} replay={replay}/>
     </Suspense>
+    {value ? <p className="position-context-note">变化比较：过去 {value.windowMinutes} 分钟</p> : null}
     <div className="position-primary">
       <div><span>OI 数量变化<MetricHelp label="OI 数量变化">OI 是尚未平仓的合约数量。这里将同币种合约按倍率归一后求和，比较所选窗口起止值；上涨表示未平仓数量增加，不等于净资金流入或多头增加。</MetricHelp></span><strong className={valueClass(value?.oiQuantityPct ?? null)}>{signed(value?.oiQuantityPct ?? null, '%', 3)}</strong><small>归一化币数量，不含价格涨跌</small></div>
       <div><span>价格变化<MetricHelp label="价格变化">与 OI 比较同一对快照的指数价格：（终点 ÷ 起点 − 1）×100%。这是窗口净变化，不代表中间一直上涨或下跌。</MetricHelp></span><strong className={valueClass(value?.pricePct ?? null)}>{signed(value?.pricePct ?? null, '%', 3)}</strong><small>同一对快照端点 · 指数价格</small></div>

@@ -26,11 +26,33 @@ describe('change-monitor controls', () => {
     vi.stubGlobal('localStorage', { getItem: () => '{broken' }); expect(readChangeRule()).toEqual(DEFAULT_CHANGE_RULE);
     vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ oi: null }) }); expect(readChangeRule()).toEqual(DEFAULT_CHANGE_RULE);
   });
+  it('keeps an existing one-minute rule and its thresholds without writing or resetting it', () => {
+    const saved = { ...DEFAULT_CHANGE_RULE, windowMinutes: 1, combine: 'any' as const,
+      oi: { ...DEFAULT_CHANGE_RULE.oi, threshold: 0.25 }, fdv: { ...DEFAULT_CHANGE_RULE.fdv, threshold: 0.1 } };
+    const setItem = vi.fn();
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify(saved), setItem });
+    expect(readChangeRule()).toEqual(saved);
+    expect(parseChangeDraft({ ...draft(), window: '1' })?.windowMinutes).toBe(1);
+    expect(setItem).not.toHaveBeenCalled();
+  });
   it('shows a real source cooldown only until its known deadline', () => {
     const until = Date.UTC(2026, 8, 23, 11);
     const snapshot = { errors: [`BINANCE_PRICE: RATE_LIMIT_COOLDOWN: fapi.binance.com 等待至 ${new Date(until).toISOString()}`] } as Snapshot;
     expect(changeSourceCooldown(snapshot, until - 10_001)).toBe(11);
     expect(changeSourceCooldown(snapshot, until)).toBe(0);
     expect(changeSourceCooldown({ errors: ['RATE_LIMIT_BUDGET', 'RATE_LIMIT_COOLDOWN: invalid'] } as Snapshot, until)).toBe(0);
+  });
+  it('does not disable Binance refresh for an independent supply-provider cooldown', () => {
+    const now = Date.UTC(2026, 8, 29, 8);
+    const supplyUntil = new Date(now + 300_000).toISOString();
+    const errors = [
+      `COINGECKO_SUPPLY: RATE_LIMIT_COOLDOWN: api.coingecko.com 等待至 ${supplyUntil}`,
+      `COINGECKO_RETRY: 下次尝试不早于 ${supplyUntil}；Binance OI 采集继续`,
+      `CMC_SUPPLY: RATE_LIMIT_COOLDOWN: pro-api.coinmarketcap.com 等待至 ${supplyUntil}`,
+    ];
+    expect(changeSourceCooldown({ errors } as Snapshot, now)).toBe(0);
+    expect(changeSourceCooldown({ errors, retryAt: now + 10_000 } as Snapshot, now)).toBe(10);
+    expect(changeSourceCooldown({ errors: [...errors,
+      `BINANCE_PRICE: RATE_LIMIT_COOLDOWN: fapi.binance.com 等待至 ${new Date(now + 20_000).toISOString()}`] } as Snapshot, now)).toBe(20);
   });
 });

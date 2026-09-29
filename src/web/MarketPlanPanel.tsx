@@ -40,7 +40,7 @@ export function MarketPlanPrices({ plan }: { plan: MarketPlan }) {
 export function MarketPlanRules({ plan }: { plan: MarketPlan }) {
   const config = plan.directionConfig;
   return <details className="market-plan-method"><summary>条件、成本与价位依据</summary>
-    <p>冻结方向档位：{DIRECTION_LABELS[directionPreset(config)]}。采纳后必须出现结束时间晚于采纳时刻的新 5m 窗口，OI ≥ +{config.oiPct}%，价格{plan.side === 'long' ? '涨幅' : '跌幅'} &gt; {config.pricePct}%，
+    <p>冻结方向档位：{DIRECTION_LABELS[directionPreset(config)]}。用最新 5 分钟数据确认方向，窗口结束时间须晚于采纳时刻，不是固定再等 5 分钟。OI ≥ +{config.oiPct}%，价格{plan.side === 'long' ? '涨幅' : '跌幅'} &gt; {config.pricePct}%，
       {plan.side === 'long' ? `主动买占比 ≥ ${config.flowSharePct}%、净主动成交为正` : `主动买占比 ≤ ${directionSellThreshold(config.flowSharePct)}%、净主动成交为负`}，且当前标记价进入冻结区间。不是仅触价提醒。{config.requireSpot ? '必须现货同向确认。' : '现货明确反向时不确认。'}</p>
     <p>最差区间价按往返 {plan.roundTripCostBps} bps 的估算成本复核，剩余收益风险比 {plan.netRewardRisk}；成本假设不保证覆盖实际费用、资金费和滑点，也不是收益率。</p>
     {plan.reasons.map((reason, index) => <p key={index}>{reason}</p>)}
@@ -59,7 +59,8 @@ export function MarketPlanCandidate({ plan, adopting, onAdopt }: { plan: MarketP
   const existing = runtime.book.watches.some(watch => watch.plan.market.key === plan.market.key && (watch.phase === 'watching' || watch.phase === 'ready'));
   const expired = checkedAt < plan.generatedAt || checkedAt - plan.generatedAt > 60_000;
   if (saved) return <p className="market-plan-caption" role="status">已采纳，冻结方案见下方进场观察。</p>;
-  return <><MarketPlanPrices plan={plan}/><div className="market-plan-timing"><span>等待截止 {dateTime(plan.waitUntil)}（最多 30 分钟）</span><span>成交后最长持有 {plan.holdingLimitMs / 60_000} 分钟</span></div>
+  return <><MarketPlanPrices plan={plan}/><div className="market-plan-timing"><span>进场观察截止 {dateTime(plan.waitUntil)}（生成后 30 分钟）</span><span>成交后最晚复查离场 {plan.holdingLimitMs / 60_000} 分钟</span></div>
+    <p className="market-plan-caption">止损或目标先到先提醒，不要求持满；记录成交后仍需采纳离场建议。</p>
     <div className="market-plan-actions"><p>{expired ? '候选已过期，请重新分析。60 秒限制不影响已采纳观察。' : existing ? '本合约已有观察，请先停止原观察后再采纳。' : '候选生成后 60 秒内可采纳；采纳不会下单或创建真实持仓。'}</p>
       <button className="button primary" type="button" disabled={adopting || !runtime.loaded || !!runtime.error || expired || existing} onClick={onAdopt}>{adopting ? '保存观察中…' : '采纳并开始条件观察'}</button></div><MarketPlanRules plan={plan}/></>;
 }
@@ -114,7 +115,7 @@ function MarketWatch({ watch, readOnly }: { watch: EntryWatch; readOnly: boolean
       {!readOnly ? <div className="market-watch-buttons">{watch.phase !== 'filled' && !watch.fillIntent ? <button className="button secondary" type="button" onClick={() => setEditing(value => !value)} disabled={busy || !runtime.loaded}>{editing ? '收起成交录入' : '记录实际成交'}</button> : null}
         {active && !watch.fillIntent ? <button className="button text-button" type="button" onClick={() => void stop()} disabled={busy || !runtime.loaded}>{busy ? '停止中…' : '停止观察'}</button> : null}</div> : null}</div>
     <MarketPlanPrices plan={watch.plan}/>{watch.phase === 'filled' ? <FilledPositionStatus positionId={watch.filledPositionId}/> : <p className="market-watch-reason">{watch.reason}</p>}
-    <div className="market-watch-meta">等待截止 {dateTime(watch.plan.waitUntil)} · 最长持有 {watch.plan.holdingLimitMs / 60_000} 分钟 · 采纳 {clockTime(watch.adoptedAt)}</div>
+    <div className="market-watch-meta">进场观察截止 {dateTime(watch.plan.waitUntil)} · 成交后最晚复查离场 {watch.plan.holdingLimitMs / 60_000} 分钟 · 采纳 {clockTime(watch.adoptedAt)}</div>
     {watch.gap ? <p className="market-plan-boundary">观察曾中断，只确认恢复后实际数据，不推断离线期间条件。</p> : null}
     {watch.fillIntent && watch.phase !== 'filled' ? <p className="market-plan-boundary" role="status">实际成交记录正在恢复，请勿重复录入；原始输入已保留。</p> : null}
     {!readOnly && editing && watch.phase !== 'filled' && !watch.fillIntent ? <MarketFillForm watch={watch} onCancel={() => setEditing(false)} onSaved={() => setEditing(false)}/> : null}
@@ -180,10 +181,10 @@ function MarketPlanSession({ market, replay }: { market: FlowMarket | null; repl
     {replay ? <p className="market-plan-empty">历史事件回看仅供查看，不分析或采纳当前进场计划。请返回实时市场。</p>
       : !market ? <p className="market-plan-empty">请选择有明确行情身份的 USDT 永续合约。不会把现货、USDC 或缺失市场自动换成其他合约。</p>
       : <><div className="market-plan-controls"><label>条件方向<select aria-label="进场计划方向" value={side} disabled={adopting} onChange={e => { clear(); setChosenSide(e.target.value as 'long' | 'short' | ''); }}><option value="">选择做多或做空</option><option value="long">做多条件观察</option><option value="short">做空条件观察</option></select></label>
-        <label>成交后最长持有<select aria-label="最长持有时间" value={holding} disabled={adopting} onChange={e => { clear(); setHolding(Number(e.target.value)); }}>{[30, 60, 120, 240].map(minutes => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}</select></label>
+        <label>成交后最晚复查离场<select aria-label="成交后最晚复查离场" value={holding} disabled={adopting} onChange={e => { clear(); setHolding(Number(e.target.value)); }}>{[30, 60, 120, 240].map(minutes => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}</select></label>
         <button className="button secondary" type="button" disabled={!side || busy || adopting} onClick={() => void analyze()}>{busy ? '读取历史并分析…' : plan ? '重新分析进场计划' : '分析进场计划'}</button></div>
-        {direction.bias === 'wait' || side && side !== direction.bias ? <p className="market-plan-caption">当前方向未确认。选择方向只建立条件计划，仍须等待新的 5m 确认，不表示现在可以进场。</p> : null}
-        {!result && !busy ? <p className="market-plan-empty">点击后才读取本合约历史。采纳后等待新 5m 方向条件与进场区间同时满足。</p> : null}
+        {direction.bias === 'wait' || side && side !== direction.bias ? <p className="market-plan-caption">当前方向未确认。选择方向只建立条件计划，仍须最新 5 分钟数据确认，不表示现在可以进场。</p> : null}
+        {!result && !busy ? <p className="market-plan-empty">点击后才读取本合约历史。采纳后，须方向数据更新并达标，且价格进入区间；不是固定等待 5 分钟。</p> : null}
         {busy ? <p className="market-plan-caption" role="status">仅按需读取当前合约的已收盘历史，在后台计算结构价位。</p> : null}
         {result?.status === 'unavailable' ? <p className="market-plan-empty" role="status">{result.reason}</p> : null}
         {plan ? <MarketPlanCandidate plan={plan} adopting={adopting} onAdopt={() => void adopt()}/> : null}</>}

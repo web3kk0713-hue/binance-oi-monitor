@@ -36,6 +36,7 @@
 .direction-active-rule { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; line-height: 1.7; margin: 0; color: #3b4b5b; font-variant-numeric: tabular-nums; }
 .direction-active-rule strong { color: #0866b9; }
 .direction-config-caution { color: #8b6b2d; font-size: 10px; margin-left: auto; }
+.direction-scope-note { color: #596576; font-size: 11px; line-height: 1.6; margin: 6px 0 0; }
 .direction-config-note, .direction-save-state { font-size: 11px; line-height: 1.7; color: #68717d; margin-top: 5px; }
 .direction-custom { margin-top: 5px; font-size: 11px; color: #596576; }
 .direction-custom summary { padding: 4px 0; cursor: pointer; width: fit-content; }
