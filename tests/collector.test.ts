@@ -147,13 +147,13 @@ describe('official-source collector contract (fictional test fixtures)', () => {
     expect(row.evidence.mapping).toContain('单位倍率 1000');
   });
 
-  it('leaves FDV null when max supply is unknown, even if another provider publishes a native FDV', async () => {
+  it('keeps FDV null but permits circulating-market-cap monitoring when max supply is unknown', async () => {
     const f = fixture({ max: null, cmc429: true });
     const row = (await createCollector({ fetcher: f.fetcher }).collect()).assets[0]!;
     expect(row.marketCapUsd).toBeGreaterThan(0);
     expect(row.fdvUsd).toBeNull();
     expect(row.oiToFdv).toBeNull();
-    expect(row.alertEligible).toBe(false);
+    expect(row.alertEligible).toBe(true);
     expect(row.complete).toBe(true);
   });
 

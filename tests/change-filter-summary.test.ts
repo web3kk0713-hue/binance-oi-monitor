@@ -18,13 +18,13 @@ describe('collapsed change filter summary', () => {
     const summary = changeRuleSummary(DEFAULT_CHANGE_RULE);
     expect(summary).toContain(`变化比较：过去 ${DEFAULT_CHANGE_RULE.windowMinutes} 分钟`);
     expect(summary).toContain(`OI 数量 涨跌幅绝对值 ≥ ${DEFAULT_CHANGE_RULE.oi.threshold}%`);
-    expect(summary).toContain(`FDV 涨跌幅绝对值 ≥ ${DEFAULT_CHANGE_RULE.fdv.threshold}%`);
+    expect(summary).toContain(`估值（FDV优先） 涨跌幅绝对值 ≥ ${DEFAULT_CHANGE_RULE.fdv.threshold}%`);
     expect(summary).toContain(' · 且 · ');
   });
   it('distinguishes amount basis, down-only rules, disabled filters, and either-condition matching', () => {
     expect(changeRuleSummary({ ...DEFAULT_CHANGE_RULE, windowMinutes: 60, oiBasis: 'usd', combine: 'any',
       oi: { enabled: true, direction: 'down', threshold: 2.5 }, fdv: { ...DEFAULT_CHANGE_RULE.fdv, enabled: false } }))
-      .toBe('变化比较：过去 60 分钟 · OI 金额 下跌 ≥ 2.5% · 或 · FDV 不限制');
+      .toBe('变化比较：过去 60 分钟 · OI 金额 下跌 ≥ 2.5% · 或 · 估值（FDV优先） 不限制');
   });
   it('names the applied one-minute comparison without implying a five-minute direction override', () => {
     const summary = changeRuleSummary({ ...DEFAULT_CHANGE_RULE, windowMinutes: 1 });

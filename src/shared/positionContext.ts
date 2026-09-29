@@ -1,7 +1,8 @@
 import Decimal from 'decimal.js';
 import { changeWindowIssue, compareMetric, latestEndpointIssue, oiChangeIssue, priceChangeIssue,
   type ChangeCondition } from './changeMonitor';
-import type { AssetRow, HistoryPoint } from './types';
+import type { AssetRow, HistoryPoint, ValuationBasis } from './types';
+import { selectValuation, valuationPair } from './valuation';
 
 export const POSITION_THRESHOLDS = { oiPct: 5, flatPricePct: 0.5 } as const;
 export type PositionPattern = 'build_flat' | 'build_up' | 'build_down'
@@ -24,6 +25,8 @@ export interface PositionContext {
   reason: string;
   issues: string[];
   supplyChanged: boolean;
+  /** Legacy fdv/oiToFdv keys describe this selected basis; raw historical fields stay separate. */
+  valuationBasis?: ValuationBasis | null;
 }
 
 const ExactDecimal = Decimal.clone({ precision: 80 });
@@ -46,14 +49,15 @@ function alignmentIssue(point: HistoryPoint): string | null {
 }
 
 function ratioValue(point: HistoryPoint): { value: Decimal | null; issue: string | null } {
+  const valuation = selectValuation(point);
   if (!finiteNonnegative(point.oiUsd)) return { value: null, issue: 'OI 美元值缺失或无效' };
-  if (!positive(point.fdvUsd)) return { value: null, issue: 'FDV 缺失或不大于零' };
+  if (!positive(valuation.valueUsd)) return { value: null, issue: 'FDV 与流通市值均缺失或不大于零' };
   if (!positive(point.priceUsd)) return { value: null, issue: '价格缺失或不大于零' };
   // The archived skew covers all contracts. Check the aggregate source stamps too so malformed
   // metadata cannot pair an otherwise fresh OI with a different price observation.
   const misalignment = alignmentIssue(point);
   if (misalignment) return { value: null, issue: misalignment };
-  const value = new ExactDecimal(point.oiUsd).div(point.fdvUsd).times(100);
+  const value = new ExactDecimal(point.oiUsd).div(valuation.valueUsd).times(100);
   return asFinite(value) === null ? { value: null, issue: '占比超出可表示范围' } : { value, issue: null };
 }
 
@@ -67,7 +71,9 @@ export function analyzePosition(asset: AssetRow, latest: HistoryPoint, baseline:
     startAt: baseline?.timestamp ?? null, endAt: latest.timestamp,
     oiQuantityPct: null, oiUsdPct: null, pricePct: null, fdvPct: null,
     oiToFdvPct: null, oiToFdvChangePct: null, oiToFdvDeltaPp: null,
-    pattern: 'unavailable', label: labels.unavailable, reason: '', issues: [], supplyChanged: false };
+    pattern: 'unavailable', label: labels.unavailable, reason: '', issues: [], supplyChanged: false,
+    valuationBasis: selectValuation(latest).basis };
+  const valuation = selectValuation(latest);
   const issue = (label: string, detail: string | null) => {
     if (detail) result.issues.push(`${label}：${detail}`);
   };
@@ -87,7 +93,7 @@ export function analyzePosition(asset: AssetRow, latest: HistoryPoint, baseline:
   const currentIssue = latestIssue ?? oiChangeIssue(latest, latest, now, 'usd');
   const currentRatio = currentIssue ? { value: null, issue: currentIssue } : ratioValue(latest);
   result.oiToFdvPct = currentRatio.value === null ? null : asFinite(currentRatio.value);
-  issue('当前 OI/FDV', currentRatio.issue);
+  issue(`当前 OI/${valuation.label}`, currentRatio.issue);
 
   const windowIssue = changeWindowIssue(asset.id, latest, baseline, windowMinutes, now);
   if (windowIssue || !baseline) {
@@ -103,7 +109,8 @@ export function analyzePosition(asset: AssetRow, latest: HistoryPoint, baseline:
   const quantity = compareMetric(latest.oiQuantity, baseline.oiQuantity, observation, quantityIssue);
   const usd = compareMetric(latest.oiUsd, baseline.oiUsd, displayOnly, usdIssue);
   const price = compareMetric(latest.priceUsd, baseline.priceUsd, displayOnly, priceIssue);
-  const fdv = compareMetric(latest.fdvUsd, baseline.fdvUsd, displayOnly, priceIssue);
+  const pair = valuationPair(latest, baseline);
+  const fdv = compareMetric(pair.latest.valueUsd, pair.baseline.valueUsd, displayOnly, priceIssue ?? pair.issue);
   result.oiQuantityPct = quantity.pct;
   result.oiUsdPct = usd.pct;
   result.pricePct = price.pct;
@@ -111,28 +118,28 @@ export function analyzePosition(asset: AssetRow, latest: HistoryPoint, baseline:
   issue('OI 数量', quantity.issue);
   issue('OI 美元值', usd.issue);
   issue('价格', price.issue);
-  issue('FDV', fdv.issue);
+  issue(valuation.label, fdv.issue);
 
-  const baselineRatio = usdIssue ? { value: null, issue: usdIssue } : ratioValue(baseline);
+  const baselineRatio = (usdIssue ?? pair.issue) ? { value: null, issue: usdIssue ?? pair.issue } : ratioValue(baseline);
   if (currentRatio.value !== null && baselineRatio.value !== null) {
     result.oiToFdvDeltaPp = asFinite(currentRatio.value.minus(baselineRatio.value));
     if (baselineRatio.value.greaterThan(0)) {
       // Relative change of the levels, not a division of their percentage changes.
       result.oiToFdvChangePct = asFinite(currentRatio.value.div(baselineRatio.value).minus(1).times(100));
-      if (result.oiToFdvChangePct === null) issue('OI/FDV 变化', '相对变化超出可表示范围');
-    } else issue('OI/FDV 变化', '起点占比为零，无法计算相对变化');
-    if (result.oiToFdvDeltaPp === null) issue('OI/FDV 变化', '百分点变化超出可表示范围');
-  } else issue('OI/FDV 变化', baselineRatio.issue ?? currentRatio.issue);
+      if (result.oiToFdvChangePct === null) issue(`OI/${valuation.label} 变化`, '相对变化超出可表示范围');
+    } else issue(`OI/${valuation.label} 变化`, '起点占比为零，无法计算相对变化');
+    if (result.oiToFdvDeltaPp === null) issue(`OI/${valuation.label} 变化`, '百分点变化超出可表示范围');
+  } else issue(`OI/${valuation.label} 变化`, baselineRatio.issue ?? currentRatio.issue);
 
   if (price.pct !== null && fdv.pct !== null && positive(latest.priceUsd) && positive(baseline.priceUsd)
-    && positive(latest.fdvUsd) && positive(baseline.fdvUsd)) {
+    && !pair.issue && positive(pair.latest.valueUsd) && positive(pair.baseline.valueUsd)) {
     // FDV / price is the implied supply. Flag a > 0.01% revision (strictly greater,
     // compared before rounding); ordinary representation noise should not generate a warning.
-    const currentCross = new ExactDecimal(latest.fdvUsd).times(baseline.priceUsd);
-    const baselineCross = new ExactDecimal(baseline.fdvUsd).times(latest.priceUsd);
+    const currentCross = new ExactDecimal(pair.latest.valueUsd).times(baseline.priceUsd);
+    const baselineCross = new ExactDecimal(pair.baseline.valueUsd).times(latest.priceUsd);
     result.supplyChanged = currentCross.minus(baselineCross).abs().times(100)
       .greaterThan(baselineCross.times('0.01'));
-    if (result.supplyChanged) issue('供给口径', '隐含供应量变化超过 0.01%，FDV 不再仅反映价格，占比变化可能含供给修订');
+    if (result.supplyChanged) issue('供给口径', `隐含供应量变化超过 0.01%，${valuation.label}不再仅反映价格，占比变化可能含供给修订`);
   }
 
   if (quantity.pct === null || price.pct === null)

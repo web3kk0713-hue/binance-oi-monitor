@@ -1,5 +1,6 @@
 import { toHistoryPoint } from './history';
 import type { AssetRow, HistoryPoint, Snapshot } from './types';
+import { hasFreshMarketCapEvidence } from './valuation';
 
 type DisplayValues = Pick<HistoryPoint, 'oiUsd' | 'oiQuantity' | 'priceUsd' | 'marketCapUsd' | 'fdvUsd' | 'oiToFdv' | 'oiToMarketCap'>;
 const RETENTION_MS = 7 * 86_400_000;
@@ -44,7 +45,8 @@ function observedPoint(asset: AssetRow, snapshot: Snapshot): HistoryPoint | unde
 function maskUnverifiedValuations(point: HistoryPoint, current: AssetRow): HistoryPoint {
   const supply = current.evidence.supply;
   const identityValid = current.mappingStatus === 'verified' && !!supply && positive(supply.providerPriceUsd);
-  const capValid = identityValid && positive(current.circulatingSupply) && positive(supply.circulating);
+  const capValid = identityValid && positive(current.circulatingSupply) && positive(supply.circulating)
+    || hasFreshMarketCapEvidence(current, current.updatedAt);
   const fdvValid = identityValid && positive(current.maxSupply) && positive(supply.max);
   return { ...point, ...(capValid ? {} : { marketCapUsd: null, oiToMarketCap: null }),
     ...(fdvValid ? {} : { fdvUsd: null, oiToFdv: null }) };

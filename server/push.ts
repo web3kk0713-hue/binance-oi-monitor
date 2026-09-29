@@ -4,6 +4,7 @@ import { Agent, request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import webpush from 'web-push';
 import type { AlertEvent } from '../src/shared/types';
+import { valuationLabel } from '../src/shared/valuation';
 import type { ServerConfig } from './config';
 
 export function hashSecret(value: string) { return createHash('sha256').update(value).digest('hex'); }
@@ -66,6 +67,20 @@ export interface PushSender {
   send(subscription: PushSubscriptionJSON, event: AlertEvent): Promise<void>;
   close?(): void;
 }
+
+/** Legacy alerts omitted the basis and always compared OI against raw FDV. */
+export function formatAlertPushPayload(event: AlertEvent, url: string) {
+  const basis = event.valuationBasis === undefined ? 'fdv' : event.valuationBasis;
+  const label = valuationLabel(basis);
+  const value = event.valuationUsd ?? (basis === 'fdv' ? event.fdvUsd : null);
+  const amount = value != null && Number.isFinite(value) && value > 0
+    ? `$${value.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '暂无数据';
+  const level = { warning: '关注', danger: '高风险', critical: '强提醒' }[event.level];
+  return { title: `${level} · ${event.symbol} OI/${label} ${event.ratio.toFixed(1)}%`,
+    body: `合约 OI $${event.oiUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}，${label} ${amount}`,
+    tag: `oi-fdv:${event.assetId}`, url, event };
+}
+
 export class BrowserPushSender implements PushSender {
   readonly enabled: boolean;
   readonly publicKey: string | null;
@@ -80,10 +95,7 @@ export class BrowserPushSender implements PushSender {
   }
   async send(subscription: PushSubscriptionJSON, event: AlertEvent) {
     if (!this.enabled || !validPushSubscription(subscription)) throw new Error('Push is unavailable');
-    const level = { warning: '关注', danger: '高风险', critical: '强提醒' }[event.level];
-    const payload = JSON.stringify({ title: `${level} · ${event.symbol} OI/FDV ${event.ratio.toFixed(1)}%`,
-      body: `合约 OI $${event.oiUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}，FDV $${event.fdvUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
-      tag: `oi-fdv:${event.assetId}`, url: this.config.notificationUrl, event });
+    const payload = JSON.stringify(formatAlertPushPayload(event, this.config.notificationUrl));
     // Reuse audited message encryption/VAPID construction, while imposing an absolute network deadline.
     const details = webpush.generateRequestDetails(subscription as webpush.PushSubscription, payload, {
       vapidDetails: { subject: this.config.vapidSubject!, publicKey: this.config.vapidPublicKey!, privateKey: this.config.vapidPrivateKey! },

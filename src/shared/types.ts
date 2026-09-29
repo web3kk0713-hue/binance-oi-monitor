@@ -23,6 +23,13 @@ export interface SupplyEvidence {
   /** Provider USD token price used only to reject inconsistent identity mappings. */
   providerPriceUsd?: number | null;
 }
+export type ValuationBasis = 'fdv' | 'marketCap';
+/** Binance publishes CMC circulating supply keyed to the exact futures contract. */
+export interface MarketCapEvidence {
+  provider: 'Binance'; upstream: 'CoinMarketCap'; contractSymbol: string;
+  circulatingSupply: number; unitMultiplier: number;
+  sourceTime: number; fetchedAt: number; url: string;
+}
 export interface AssetRow {
   id: string; symbol: string; name: string; contracts: string[];
   priceUsd: number | null; oiUsd: number | null;
@@ -32,7 +39,7 @@ export interface AssetRow {
   updatedAt: number; oiUpdatedAt: number | null; priceUpdatedAt: number | null; supplyUpdatedAt: number | null;
   complete: boolean; alertEligible: boolean; issues: string[];
   supplySource: string | null; mappingStatus: 'verified' | 'unmapped';
-  evidence: { contracts: ContractEvidence[]; supply: SupplyEvidence | null; mapping: string };
+  evidence: { contracts: ContractEvidence[]; supply: SupplyEvidence | null; mapping: string; marketCap?: MarketCapEvidence };
   /** Sum(native OI × token-unit multiplier), not USD notional. */
   oiQuantity?: number | null;
 }
@@ -69,9 +76,11 @@ export interface RawContractPoint {
 }
 export interface AlertEvent {
   id: string; assetId: string; symbol: string; level: AlertLevel;
-  ratio: number; oiUsd: number; fdvUsd: number; timestamp: number;
+  ratio: number; oiUsd: number; fdvUsd: number | null; timestamp: number;
+  /** Omitted on legacy FDV-only alerts. Never put circulating cap into fdvUsd. */
+  valuationBasis?: ValuationBasis | null; valuationUsd?: number | null;
 }
-export interface AlertState { assetId: string; lastLevel: number; lastSentAt: number; }
+export interface AlertState { assetId: string; lastLevel: number; lastSentAt: number; valuationBasis?: ValuationBasis; }
 export interface CollectorOptions {
   mode?: 'direct' | 'server'; concurrency?: number; cmcApiKey?: string;
   fetcher?: typeof fetch;

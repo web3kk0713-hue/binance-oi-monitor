@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
-import { COLLECTION_INTERVAL_MS, type AssetRow, type Collector, type CollectorOptions, type ContractEvidence, type Snapshot, type SourceStamp, type SupplyEvidence } from '../shared/types';
+import { COLLECTION_INTERVAL_MS, type AssetRow, type Collector, type CollectorOptions, type ContractEvidence, type MarketCapEvidence, type Snapshot, type SourceStamp, type SupplyEvidence } from '../shared/types';
+import { hasFreshMarketCapEvidence, MARKET_CAP_MAX_AGE_MS } from '../shared/valuation';
 import { IDENTITY_OVERRIDES, UNIT_ALIASES } from './aliases';
 import { createSourceClient, SourceError } from './http';
 
@@ -17,6 +18,11 @@ const SUPPLY_REFRESH = 60 * MINUTE;
 const SUPPLY_MAX_AGE = 2 * SUPPLY_REFRESH;
 const MARKET_MAX_AGE = 90_000;
 const ROUND_BUDGET_MS = COLLECTION_INTERVAL_MS - 3_000;
+const MARKET_CAP_REFRESH = 5 * MINUTE;
+const MARKET_CAP_BATCH = 60, MARKET_CAP_BUDGET_MS = 4_000;
+// A rolling metadata budget shared by collectors using the same transport; the
+// HTTP governor additionally coordinates Binance weight/cooldowns with live OI.
+const marketCapRequestTimes = new WeakMap<typeof fetch, number[]>();
 const MAX_PROVIDER_PRICE_DEVIATION = new Decimal('0.30');
 const STABLE_MARGIN = new Set(['USDT', 'USDC', 'USD1', 'U']);
 
@@ -24,6 +30,7 @@ interface Contract { symbol: string; baseAsset: string; quoteAsset: string; marg
 interface Premium { symbol: string; markPrice: string; indexPrice: string; time: number; }
 interface Fx { symbol: string; index: string; time: number; }
 interface Oi { symbol: string; openInterest: string; time: number; }
+interface OiStatistics { symbol: string; CMCCirculatingSupply?: string; timestamp: number; }
 interface GeckoTicker { symbol: string; base: string; target: string; coin_id: string | null; contract_type: string; }
 interface CmcPrice { id?: number; symbol?: string; price?: number | null; }
 interface CmcQuote { id: number; symbol: string; name: string; circulating_supply: number | null; total_supply: number | null; max_supply: number | null; infinite_supply?: boolean; last_updated?: string; quote?: CmcPrice[] | Record<string, CmcPrice>; }
@@ -73,6 +80,10 @@ function cmcUsdPrice(quote: CmcQuote['quote']): number | null {
   const usd = Array.isArray(quote) ? quote.find(q => q.symbol === 'USD' || q.id === 2781) : quote?.USD;
   return finite(decimal(usd?.price));
 }
+function marketCapUrl(symbol: string): string { return `${BINANCE}/futures/data/openInterestHist?symbol=${encodeURIComponent(symbol)}&period=5m&limit=1`; }
+function contractOrder(a: { quoteAsset: string; symbol: string }, b: { quoteAsset: string; symbol: string }): number {
+  return Number(b.quoteAsset === 'USDT') - Number(a.quoteAsset === 'USDT') || a.symbol.localeCompare(b.symbol);
+}
 
 export function createCollector(options: CollectorOptions = {}): Collector {
   const mode = options.mode ?? 'direct';
@@ -82,12 +93,17 @@ export function createCollector(options: CollectorOptions = {}): Collector {
   const key = useCmc ? options.cmcApiKey : undefined;
   const requestedConcurrency = Number.isFinite(options.concurrency) ? Math.floor(options.concurrency!) : 12;
   const concurrency = Math.max(1, Math.min(12, requestedConcurrency));
-  const request = createSourceClient(options.fetcher ?? fetch, concurrency);
+  const fetcher = options.fetcher ?? fetch;
+  const request = createSourceClient(fetcher, concurrency);
+  const marketCapRequest = createSourceClient(fetcher, Math.min(concurrency, 4), { priority: 'background' });
   request.deferUntil(options.initialSnapshot?.retryAt ?? 0);
   let universe: Cached<Contract[]> | undefined;
   let geckoMapping: Cached<GeckoTicker[]> | undefined;
   const supplies = new Map<string, Supply>();
   const identities = new Map<string, Identity>();
+  const marketCaps = new Map<string, MarketCapEvidence>();
+  const marketCapAttempts = new Map<string, number>();
+  let marketCapRetryAt = 0;
   let nextSupplyAttempt = 0;
   let geckoRetryAt = 0;
   let geckoFailures = 0;
@@ -98,6 +114,19 @@ export function createCollector(options: CollectorOptions = {}): Collector {
   // Scheduling metadata only: failed/old values never enter a new raw snapshot.
   const oiSchedule = new Map<string, { attemptedAt: number; successful: boolean; order: number }>();
   let oiAttemptSequence = 0;
+
+  // Independent contract-bound evidence does not require an unrelated CG identity.
+  for (const row of options.initialSnapshot?.assets ?? []) {
+    const evidence = row.evidence.marketCap;
+    const contract = row.evidence.contracts.find(item => item.symbol === evidence?.contractSymbol);
+    if (evidence && contract && hasFreshMarketCapEvidence(row, Date.now())
+      && evidence.url === marketCapUrl(contract.symbol)
+      && contract.symbol === contract.baseAsset + contract.quoteAsset
+      && row.symbol === (UNIT_ALIASES[contract.baseAsset]?.symbol ?? contract.baseAsset)
+      && evidence.unitMultiplier === (UNIT_ALIASES[contract.baseAsset]?.multiplier ?? 1)) {
+      marketCaps.set(row.symbol, { ...evidence });
+    }
+  }
 
   // Rehydrate only still-fresh, previously verified evidence. Original provider times are never rewritten.
   for (const row of options.initialSnapshot?.assets ?? []) {
@@ -269,6 +298,90 @@ export function createCollector(options: CollectorOptions = {}): Collector {
     return primary && supplyFresh(primary) ? primary : fallback && supplyFresh(fallback) ? fallback : primary ?? fallback;
   }
 
+  function marketCapFresh(evidence: MarketCapEvidence | undefined, group: Contract[], now: number): evidence is MarketCapEvidence {
+    return !!evidence && !!decimal(evidence.circulatingSupply)
+      && fresh(evidence.sourceTime, now, MARKET_CAP_MAX_AGE_MS) && fresh(evidence.fetchedAt, now, MARKET_CAP_MAX_AGE_MS)
+      && group.some(contract => contract.symbol === evidence.contractSymbol && evidence.unitMultiplier === (UNIT_ALIASES[contract.baseAsset]?.multiplier ?? 1));
+  }
+
+  async function loadMarketCaps(contracts: Contract[], prices: Premium[], fx: Fx[], signal: AbortSignal, startedAt: number, errors: string[]) {
+    // No metadata work can occupy the live OI semaphore or delay unfinished OI.
+    if (signal.aborted || Date.now() < marketCapRetryAt || marketCapRequest.retryAt() > Date.now()) return;
+    const grouped = new Map<string, Contract[]>();
+    for (const contract of contracts) {
+      const base = UNIT_ALIASES[contract.baseAsset]?.symbol ?? contract.baseAsset;
+      grouped.set(base, [...grouped.get(base) ?? [], contract]);
+    }
+    for (const base of marketCaps.keys()) if (!grouped.has(base)) { marketCaps.delete(base); marketCapAttempts.delete(base); }
+    const priceMap = new Map(prices.map(price => [price.symbol, price]));
+    const fxMap = new Map(fx.map(rate => [rate.symbol, rate]));
+    const candidates = [...grouped].flatMap(([base, group]) => {
+      const now = Date.now();
+      const reference = [...group].sort(contractOrder).find(contract => {
+        const price = priceMap.get(contract.symbol), rate = fxMap.get(`${contract.quoteAsset}USD`);
+        return contract.symbol === contract.baseAsset + contract.quoteAsset && /^[\p{L}\p{N}_]{1,40}$/u.test(contract.symbol)
+          && decimal(price?.indexPrice) && decimal(rate?.index) && fresh(epoch(price?.time), now, MARKET_MAX_AGE) && fresh(epoch(rate?.time), now, MARKET_MAX_AGE);
+      });
+      if (!reference) return [];
+      const identity = identities.get(group[0]!.baseAsset), supply = selectSupply(identity);
+      const tokenPrice = decimal(priceMap.get(reference.symbol)!.indexPrice)!.mul(fxMap.get(`${reference.quoteAsset}USD`)!.index).div(UNIT_ALIASES[reference.baseAsset]?.multiplier ?? 1);
+      const providerPrice = decimal(supply?.evidence.providerPriceUsd);
+      if (identity && supply && supplyFresh(supply) && supply.symbol === identity.symbol.toUpperCase()
+        && decimal(supply.evidence.circulating) && providerPrice && tokenPrice.div(providerPrice).sub(1).abs().lte(MAX_PROVIDER_PRICE_DEVIATION)) return [];
+      const cached = marketCaps.get(base);
+      if (marketCapFresh(cached, group, now) && now - cached.fetchedAt < MARKET_CAP_REFRESH) return [];
+      const attemptedAt = marketCapAttempts.get(base);
+      if (attemptedAt !== undefined && now - attemptedAt < MINUTE) return [];
+      return [{ base, contract: reference, attemptedAt: attemptedAt ?? 0 }];
+    }).sort((a, b) => a.attemptedAt - b.attemptedAt);
+    if (!candidates.length) return;
+    const remaining = Math.min(MARKET_CAP_BUDGET_MS, startedAt + ROUND_BUDGET_MS - Date.now());
+    if (remaining <= 0) return;
+    let recent = marketCapRequestTimes.get(fetcher);
+    if (!recent) { recent = []; marketCapRequestTimes.set(fetcher, recent); }
+    while (recent.length && recent[0]! <= Date.now() - MARKET_CAP_REFRESH) recent.shift();
+    const batch = candidates.slice(0, Math.min(MARKET_CAP_BATCH, 600 - recent.length));
+    if (!batch.length) { errors.push('BINANCE_MARKET_CAP_BUDGET: 流通量补取达到每 5 分钟 600 次上限，OI 采集继续'); return; }
+    const budget = new AbortController(), combined = AbortSignal.any([signal, budget.signal]);
+    const timeout = setTimeout(() => budget.abort(new Error('MARKET_CAP_BUDGET_4S')), remaining);
+    const failures: string[] = [];
+    let cursor = 0, stopped = false;
+    try {
+      await Promise.all(Array.from({ length: Math.min(concurrency, 4, batch.length) }, async () => {
+        while (cursor < batch.length && !combined.aborted && !stopped) {
+          const { base, contract } = batch[cursor++]!;
+          if (recent!.length >= 600) break;
+          recent!.push(Date.now()); marketCapAttempts.set(base, Date.now());
+          const url = marketCapUrl(contract.symbol);
+          try {
+            const rows = await marketCapRequest<OiStatistics[]>(url, combined);
+            // Late responses after cancellation must not populate the next round's cache.
+            combined.throwIfAborted();
+            const fetchedAt = Date.now(), row = Array.isArray(rows) && rows.length === 1 ? rows[0] : undefined;
+            const sourceTime = epoch(row?.timestamp), nativeSupply = decimal(row?.CMCCirculatingSupply);
+            const multiplier = UNIT_ALIASES[contract.baseAsset]?.multiplier ?? 1;
+            const circulatingSupply = finite(nativeSupply?.mul(multiplier) ?? null);
+            if (!row || row.symbol !== contract.symbol || !circulatingSupply || !Number.isSafeInteger(sourceTime)
+              || sourceTime! % MARKET_CAP_REFRESH !== 0 || !fresh(sourceTime, fetchedAt, MARKET_CAP_MAX_AGE_MS)) throw new Error('流通量、合约身份或源时间无效');
+            marketCaps.set(base, { provider: 'Binance', upstream: 'CoinMarketCap', contractSymbol: contract.symbol,
+              circulatingSupply, unitMultiplier: multiplier, sourceTime: sourceTime!, fetchedAt, url });
+          } catch (error) {
+            if (combined.aborted) break;
+            failures.push(`${contract.symbol}: ${message(error)}`);
+            if (error instanceof SourceError) {
+              // A whole-source failure stops this finite batch, not live OI collection.
+              stopped = true;
+              const refused = ['HTTP_401', 'HTTP_403', 'HTTP_451'].includes(error.code);
+              marketCapRetryAt = Math.max(Date.now() + (refused ? MARKET_CAP_REFRESH : MINUTE), error.retryAt);
+            }
+          }
+        }
+      }));
+    } finally { clearTimeout(timeout); }
+    if (failures.length) errors.push(`BINANCE_MARKET_CAP: ${failures.slice(0, 3).join('；')}${failures.length > 3 ? `；另 ${failures.length - 3} 项失败` : ''}`);
+    if (budget.signal.aborted && !signal.aborted) errors.push('BINANCE_MARKET_CAP_BUDGET: 流通量补取达到 4 秒预算，已取得的 OI 保留，缺失项稍后继续');
+  }
+
   async function run(roundOptions: RoundOptions = {}): Promise<Snapshot> {
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -335,6 +448,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         }
       });
       await Promise.all([...workers, loadSupply(contracts, signal, errors)]);
+      await loadMarketCaps(contracts, prices, fx, signal, startedAt, errors);
       if (roundOptions?.signal?.aborted) throw new DOMException('采集已取消', 'AbortError');
       const asOf = Date.now();
       if (signal.aborted) errors.push('ROUND_BUDGET: 本轮超过 27 秒，未取得的数据已标记缺失；30 秒为目标间隔而非数据完整保证');
@@ -352,8 +466,8 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         const identity = identities.get(group[0]!.baseAsset);
         const supply = selectSupply(identity);
         const identityCandidate = !!identity && !!supply && supply.symbol === identity.symbol.toUpperCase();
-        if (!supply) issues.push('供应量源暂不可用');
-        else if (!supplyFresh(supply)) issues.push('供应量超过 2 小时或缺少源时间，暂停告警');
+        if (!supply) issues.push('FDV 供应量源暂不可用');
+        else if (!supplyFresh(supply)) issues.push('供应量超过 2 小时或缺少源时间，暂停 FDV 告警');
         const evidence: ContractEvidence[] = group.map(contract => {
           const oi = observations.get(contract.symbol);
           const price = priceMap.get(contract.symbol);
@@ -373,7 +487,7 @@ export function createCollector(options: CollectorOptions = {}): Collector {
           const oiUrl = `${BINANCE}/fapi/v1/openInterest?symbol=${encodeURIComponent(contract.symbol)}`;
           return { symbol: contract.symbol, baseAsset: contract.baseAsset, quoteAsset: contract.quoteAsset, openInterest: oi?.data?.openInterest ?? null, markPrice: price?.markPrice ?? null, indexPrice: price?.indexPrice ?? null, quoteUsd: rate?.index ?? null, oiTime: epoch(oi?.data?.time), priceTime: epoch(price?.time), quoteTime: epoch(rate?.time), oiUsd: finite(value), unitMultiplier: UNIT_ALIASES[contract.baseAsset]?.multiplier ?? 1, ...(oi ? { oiObservedAt: oi.observedAt } : {}), ...(price ? { priceObservedAt } : {}), ...(rate ? { quoteObservedAt: fxObservedAt } : {}), ...(localIssues.length ? { error: localIssues.join('；') } : {}), sources: [stamp(EXCHANGE_URL, universe!.fetchedAt, null), stamp(oiUrl, oi?.observedAt ?? asOf, epoch(oi?.data?.time)), stamp(PRICE_URL, priceObservedAt, epoch(price?.time)), stamp(FX_URL, fxObservedAt, epoch(rate?.time))] };
         });
-        const ordered = [...evidence].sort((a, b) => (a.quoteAsset === 'USDT' ? -1 : b.quoteAsset === 'USDT' ? 1 : a.symbol.localeCompare(b.symbol)));
+        const ordered = [...evidence].sort(contractOrder);
         const reference = ordered.find(c => decimal(c.indexPrice) && decimal(c.quoteUsd) && fresh(c.priceTime, asOf, MARKET_MAX_AGE) && fresh(c.quoteTime ?? null, asOf, MARKET_MAX_AGE));
         const multiplier = reference ? UNIT_ALIASES[reference.baseAsset]?.multiplier ?? 1 : 1;
         // Native OI × native mark price already cancels contract-unit multipliers. Only per-token price is divided.
@@ -390,17 +504,22 @@ export function createCollector(options: CollectorOptions = {}): Collector {
         const oiSum = evidence.every(c => c.oiUsd !== null) ? evidence.reduce((sum, c) => sum.add(new Decimal(c.openInterest!).mul(c.markPrice!).mul(c.quoteUsd!)), new Decimal(0)) : null;
         const oiQuantity = evidence.every(c => decimal(c.openInterest, true) && fresh(c.oiTime, asOf, MARKET_MAX_AGE))
           ? evidence.reduce((sum, c) => sum.add(new Decimal(c.openInterest!).mul(c.unitMultiplier ?? 1)), new Decimal(0)) : null;
-        const circulation = mappingVerified ? supply!.evidence.circulating : null;
+        const freshVerifiedSupply = mappingVerified && !!supply && supplyFresh(supply);
+        const fallback = marketCaps.get(base);
+        const marketCapEvidence = !(freshVerifiedSupply && decimal(supply!.evidence.circulating)) && marketCapFresh(fallback, group, asOf) ? fallback : undefined;
+        const circulation = marketCapEvidence?.circulatingSupply ?? (mappingVerified ? supply!.evidence.circulating : null);
         const max = mappingVerified ? supply!.evidence.max : null;
         if (max === null) issues.push('没有已核实的最大供应量，FDV 不可用');
         if (circulation === null) issues.push('流通供应量不可用');
         const cap = tokenPrice && circulation !== null ? tokenPrice.mul(circulation) : null;
-        const fdv = tokenPrice && max !== null ? tokenPrice.mul(max) : null;
+        // Retain old FDV only for the existing read-only stale view; when fresh MC
+        // monitoring takes over, an old FDV must not remain the selected denominator.
+        const fdv = marketCapEvidence && !freshVerifiedSupply ? null : tokenPrice && max !== null ? tokenPrice.mul(max) : null;
         // OI-history completeness is independent of supply availability. FDV needs max, not circulating supply.
         const complete = asOf - universe.fetchedAt < UNIVERSE_REFRESH && evidence.every(c => !c.error) && oiSum !== null && tokenPrice !== null;
-        const alertEligible = complete && mappingVerified && !!supply && supplyFresh(supply) && !!fdv?.gt(0);
+        const alertEligible = complete && (freshVerifiedSupply && !!fdv?.gt(0) || (freshVerifiedSupply || !!marketCapEvidence) && !!cap?.gt(0));
         const oldestOi = evidence.every(c => c.oiTime !== null) ? Math.min(...evidence.map(c => c.oiTime!)) : null;
-        assets.push({ id: `binance:${base}`, symbol: base, name: mappingVerified ? supply!.name : base, contracts: group.map(c => c.symbol), priceUsd: finite(tokenPrice), oiUsd: finite(oiSum), oiQuantity: finite(oiQuantity), marketCapUsd: finite(cap), fdvUsd: finite(fdv), oiToFdv: oiSum && fdv?.gt(0) ? finite(oiSum.div(fdv).mul(100)) : null, oiToMarketCap: oiSum && cap?.gt(0) ? finite(oiSum.div(cap).mul(100)) : null, circulatingSupply: circulation, maxSupply: max, updatedAt: asOf, oiUpdatedAt: oldestOi, priceUpdatedAt: reference?.priceTime ?? null, supplyUpdatedAt: supply?.evidence.updatedAt || null, complete, alertEligible, issues: dedupe(issues), supplySource: supply?.evidence.provider ?? null, mappingStatus: mappingVerified ? 'verified' : 'unmapped', evidence: { contracts: evidence, supply: supply ? { ...supply.evidence, mappingUrl: identity?.url } : null, mapping: identity?.mapping ?? '未找到与 Binance 合约相符的可靠资产标识；不按重名或市值猜测。' } });
+        assets.push({ id: `binance:${base}`, symbol: base, name: mappingVerified ? supply!.name : base, contracts: group.map(c => c.symbol), priceUsd: finite(tokenPrice), oiUsd: finite(oiSum), oiQuantity: finite(oiQuantity), marketCapUsd: finite(cap), fdvUsd: finite(fdv), oiToFdv: oiSum && fdv?.gt(0) ? finite(oiSum.div(fdv).mul(100)) : null, oiToMarketCap: oiSum && cap?.gt(0) ? finite(oiSum.div(cap).mul(100)) : null, circulatingSupply: circulation, maxSupply: max, updatedAt: asOf, oiUpdatedAt: oldestOi, priceUpdatedAt: reference?.priceTime ?? null, supplyUpdatedAt: supply?.evidence.updatedAt || null, complete, alertEligible, issues: dedupe(issues), supplySource: supply?.evidence.provider ?? null, mappingStatus: mappingVerified ? 'verified' : 'unmapped', evidence: { contracts: evidence, supply: supply ? { ...supply.evidence, mappingUrl: identity?.url } : null, ...(marketCapEvidence ? { marketCap: { ...marketCapEvidence } } : {}), mapping: identity?.mapping ?? '未找到与 Binance 合约相符的可靠资产标识；不按重名或市值猜测。' } });
       }
       assets.sort((a, b) => (b.oiUsd ?? -1) - (a.oiUsd ?? -1));
       const failedContracts = assets.reduce((sum, a) => sum + a.evidence.contracts.filter(c => c.error).length, 0);

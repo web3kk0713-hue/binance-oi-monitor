@@ -18,7 +18,7 @@ describe('source-backed alert state machine', () => {
     expect(evaluateAlerts(sample(100), DEFAULT_THRESHOLDS, second.states, now + 2000).events[0].level).toBe('critical');
   });
   it('never alerts on missing, stale, partial, impossible or future data', () => {
-    for (const patch of [{ complete: false }, { alertEligible: false }, { fdvUsd: null }, { fdvUsd: 0 }, { oiToFdv: Infinity }, { oiUpdatedAt: now - 91000 }, { priceUpdatedAt: now + 16000 }, { supplyUpdatedAt: now - 7200001 }]) {
+    for (const patch of [{ complete: false }, { alertEligible: false }, { fdvUsd: null, marketCapUsd: null }, { fdvUsd: 0, marketCapUsd: 0 }, { oiToFdv: Infinity }, { oiUpdatedAt: now - 91000 }, { priceUpdatedAt: now + 16000 }, { supplyUpdatedAt: now - 7200001 }]) {
       expect(evaluateAlerts(sample(110, patch), DEFAULT_THRESHOLDS, {}, now).events).toHaveLength(0);
     }
     expect(evaluateAlerts({ ...sample(110), asOf: now - 91000 }, DEFAULT_THRESHOLDS, {}, now).events).toHaveLength(0);

@@ -6,6 +6,7 @@ import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
 import type { AssetRow, HistoryPoint, Thresholds } from '../shared/types';
 import { historySeries, type HistoryView } from '../shared/history';
+import { selectValuation } from '../shared/valuation';
 import { escapeHtml, money, percent } from './format';
 
 echarts.use([LineChart, EScatterChart, AriaComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, CanvasRenderer]);
@@ -43,22 +44,22 @@ export function Chart({ option, label, onSelect, className = '' }: { option: ECh
 export const ScatterChart = memo(function ScatterChart({ assets, thresholds, selectedId, onSelect }: {
   assets: AssetRow[]; thresholds: Thresholds; selectedId: string | null; onSelect: (id: string) => void;
 }) {
-  const points = useMemo(() => assets.filter((row) => row.fdvUsd !== null && row.fdvUsd > 0 && row.oiUsd !== null && row.oiUsd > 0), [assets]);
+  const points = useMemo(() => assets.flatMap(row => { const valuation = selectValuation(row); return valuation.valueUsd !== null && valuation.ratio !== null && row.oiUsd !== null && row.oiUsd > 0 ? [{ ...row, valuation }] : []; }), [assets]);
   const option = useMemo<EChartsOption>(() => {
-    const values = points.flatMap((row) => [row.fdvUsd!, row.oiUsd!]);
+    const values = points.flatMap((row) => [row.valuation.valueUsd!, row.oiUsd!]);
     const smallest = values.length ? Math.max(1, Math.min(...values)) : 1_000_000;
     const largest = values.length ? Math.max(...values) : 100_000_000;
     const min = 10 ** Math.floor(Math.log10(smallest));
     const max = 10 ** Math.ceil(Math.log10(largest * 1.05));
     return {
-      animation: false, textStyle: { fontFamily: FONT }, aria: { enabled: true, label: { description: '每个点代表一个币种，横轴为 FDV，纵轴为合约 OI，采用对数刻度。图表信息同时列于行情表格。' } },
+      animation: false, textStyle: { fontFamily: FONT }, aria: { enabled: true, label: { description: '每个点代表一个币种，横轴为估值（FDV优先，缺失时用流通市值），纵轴为合约 OI，采用对数刻度。图表信息同时列于行情表格。' } },
       grid: { left: 62, right: 24, top: 40, bottom: 50 },
-      xAxis: { type: 'log', min, max, name: 'FDV · USD', nameLocation: 'middle', nameGap: 33, nameTextStyle: { color: TEXT, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 11, formatter: (value: number) => money(value).replace('$', '') }, splitLine: { lineStyle: { color: GRID } } },
+      xAxis: { type: 'log', min, max, name: '估值 · USD', nameLocation: 'middle', nameGap: 33, nameTextStyle: { color: TEXT, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 11, formatter: (value: number) => money(value).replace('$', '') }, splitLine: { lineStyle: { color: GRID } } },
       yAxis: { type: 'log', min, max, name: 'OI · USD', nameGap: 13, nameTextStyle: { color: TEXT, align: 'left', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { hideOverlap: true, color: TEXT, fontSize: 11, formatter: (value: number) => money(value).replace('$', '') }, splitLine: { lineStyle: { color: GRID } } },
       tooltip: { ...TOOLTIP, trigger: 'item', confine: true, formatter: (parameters: unknown) => {
-        const data = (parameters as { data: { symbol?: string; value: number[]; ratio?: number } }).data;
+        const data = (parameters as { data: { symbol?: string; value: number[]; ratio?: number; valuationLabel: string } }).data;
         if (!data?.symbol) return '';
-        return `<strong>${escapeHtml(data.symbol)}</strong><br/>OI ${money(data.value[1])}<br/>FDV ${money(data.value[0])}<br/>OI / FDV ${percent(data.ratio)}`;
+        return `<strong>${escapeHtml(data.symbol)}</strong><br/>OI ${money(data.value[1])}<br/>${escapeHtml(data.valuationLabel)} ${money(data.value[0])}<br/>OI / ${escapeHtml(data.valuationLabel)} ${percent(data.ratio)}`;
       } },
       series: [
         ...(['warning', 'danger', 'critical'] as const).map((level) => ({ name: `${thresholds[level]}%`, type: 'line' as const,
@@ -66,8 +67,8 @@ export const ScatterChart = memo(function ScatterChart({ assets, thresholds, sel
           lineStyle: { color: COLORS[level], width: 1, type: 'dashed' as const, opacity: 0.55 }, tooltip: { show: false }, z: 1,
         })),
         { name: '币种', type: 'scatter', symbolSize: (_: unknown, parameters: { data: unknown }) => (parameters.data as { assetId: string }).assetId === selectedId ? 12 : 7,
-          data: points.map((row) => ({ value: [row.fdvUsd!, row.oiUsd!], assetId: row.id, symbol: row.symbol, ratio: row.oiToFdv,
-            itemStyle: { color: !row.alertEligible ? '#b5bfcd' : row.oiToFdv! >= thresholds.critical ? COLORS.critical : row.oiToFdv! >= thresholds.danger ? COLORS.danger : row.oiToFdv! >= thresholds.warning ? COLORS.warning : COLORS.oi,
+          data: points.map((row) => ({ value: [row.valuation.valueUsd!, row.oiUsd!], assetId: row.id, symbol: row.symbol, ratio: row.valuation.ratio, valuationLabel: row.valuation.label,
+            itemStyle: { color: !row.alertEligible ? '#b5bfcd' : row.valuation.ratio! >= thresholds.critical ? COLORS.critical : row.valuation.ratio! >= thresholds.danger ? COLORS.danger : row.valuation.ratio! >= thresholds.warning ? COLORS.warning : COLORS.oi,
               opacity: row.id === selectedId ? 1 : 0.66, borderColor: row.id === selectedId ? '#34343c' : '#fff', borderWidth: row.id === selectedId ? 2 : 0.5 },
             label: { show: row.id === selectedId, formatter: row.symbol, position: 'top', color: '#34343c', fontSize: 12, fontWeight: 600 },
           })), emphasis: { scale: 1.6 }, z: 3,
@@ -75,8 +76,8 @@ export const ScatterChart = memo(function ScatterChart({ assets, thresholds, sel
       ],
     };
   }, [points, selectedId, thresholds.warning, thresholds.danger, thresholds.critical]);
-  if (points.length === 0) return <div className="chart-empty scatter-empty"><div className="empty-orbit"><span /><span /><span /></div><strong>等待可比较的数据</strong><p>同时取得 OI 与可靠 FDV 后显示散点。<br/>缺失数据的币种仍保留在行情列表。</p></div>;
-  return <Chart option={option} label={`全市场 OI 与 FDV 散点图，${points.length} 个币种，点击可选中币种`} onSelect={onSelect} className="scatter-canvas" />;
+  if (points.length === 0) return <div className="chart-empty scatter-empty"><div className="empty-orbit"><span /><span /><span /></div><strong>等待可比较的数据</strong><p>同时取得 OI 与可靠估值后显示散点（FDV优先）。<br/>缺失数据的币种仍保留在行情列表。</p></div>;
+  return <Chart option={option} label={`全市场 OI 与估值散点图（FDV优先），${points.length} 个币种，点击可选中币种`} onSelect={onSelect} className="scatter-canvas" />;
 });
 
 export const HistoryCharts = memo(function HistoryCharts({ points, baseline, view, thresholds, hours, symbol, now }: { points: HistoryPoint[]; baseline: HistoryPoint | null; view: HistoryView; thresholds: Thresholds; hours: number; symbol: string; now: number }) {

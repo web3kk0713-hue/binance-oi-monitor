@@ -22,11 +22,20 @@ const snapshot = (changes: Partial<Snapshot> = {}): Snapshot => ({ schemaVersion
   startedAt: now - 1000, asOf: now, durationMs: 1000, universe: { assets: 1, contracts: 1 },
   coverage: { oi: 1, marketCap: 1, fdv: 1, eligible: 1, failedContracts: 0 }, assets: [asset()], errors: [], ...changes });
 const noFdv = () => snapshot({ coverage: { oi: 1, marketCap: 0, fdv: 0, eligible: 0, failedContracts: 0 },
-  assets: [{ ...asset(), fdvUsd: null, maxSupply: null }],
+  assets: [{ ...asset(), fdvUsd: null, marketCapUsd: null, maxSupply: null }],
   errors: ['COINGECKO_SUPPLY: NETWORK_ERROR: api.coingecko.com Failed to fetch'] });
 const base = () => ({ snapshot: snapshot(), rule, rows: [row()], scope: 'hit' as const, loading: false, now });
 
 describe('consumer-facing change availability', () => {
+  it('keeps valid market cap usable when maximum supply and FDV are unavailable', () => {
+    const fallback = { ...asset(), fdvUsd: null, maxSupply: null, oiToFdv: null };
+    const input = { ...base(), snapshot: snapshot({ assets: [fallback], coverage: { oi: 1, marketCap: 1, fdv: 0, eligible: 1, failedContracts: 0 } }) };
+    expect(changeDataNotice(input)).toBeNull();
+    expect(changeEmptyState(input).title).toBe('当前可判断的标的中，暂无达标');
+    const warning = changeDataNotice({ ...input, snapshot: { ...input.snapshot, errors: noFdv().errors } });
+    expect(warning?.blocksAllMatches).toBe(false); expect(warning?.detail).toContain('1 个采用流通市值');
+    expect(warning?.detail).toContain('1/1'); expect(warning?.title).toBe('供应量更新受阻');
+  });
   it('does not call a completely unknown comparison a market with no matches', () => {
     const missing = row({ baseline: null, startAt: null, oiPct: null, fdvPct: null, evaluable: false, status: 'unavailable' });
     const result = changeEmptyState({ ...base(), rows: [missing] });
@@ -43,8 +52,8 @@ describe('consumer-facing change availability', () => {
   });
   it('explains the AND rule cannot confirm a hit when FDV is missing even if OI already fails', () => {
     const result = changeEmptyState({ ...base(), snapshot: noFdv(), rows: [row({ fdvPct: null, fdvMatched: null })] });
-    expect(result.title).toBe('FDV 数据暂不可用');
-    expect(result.detail).toContain('要求 FDV');
+    expect(result.title).toBe('估值数据暂不可用');
+    expect(result.detail).toContain('要求估值');
   });
   it('keeps OI-only screening independent of the supply service', () => {
     const oiOnly = { ...rule, fdv: { ...rule.fdv, enabled: false } };
@@ -60,7 +69,7 @@ describe('consumer-facing change availability', () => {
   });
   it('does not call a legitimate unavailable max supply an access failure', () => {
     const input = { ...base(), snapshot: { ...noFdv(), errors: [] } };
-    expect(changeDataNotice(input)?.title).toBe('FDV 数据暂不可用');
+    expect(changeDataNotice(input)?.title).toBe('估值数据暂不可用');
     expect(changeDataNotice(input)?.detail).toContain('最大供应量');
   });
   it('retains valid cached coverage and reports an update problem without pretending the cache is a new fetch', () => {
@@ -83,7 +92,7 @@ describe('consumer-facing change availability', () => {
     expect(changeDataNotice(input)).toMatchObject({ blocksAllMatches: true });
     expect(changeDataNotice(input)?.detail).toContain('0/1');
     expect(changeDataNotice(input)?.detail).not.toContain('仍在有效期内');
-    expect(changeEmptyState(input).title).toBe('FDV 数据暂不可用');
+    expect(changeEmptyState(input).title).toBe('估值数据暂不可用');
   });
   it('explains identity endpoint access denial and its known retry deadline', () => {
     const input = { ...base(), snapshot: { ...noFdv(), errors: ['COINGECKO_IDENTITY: HTTP_403: api.coingecko.com Forbidden',
@@ -95,9 +104,24 @@ describe('consumer-facing change availability', () => {
   it('does not describe a partial response or unresolved identity as a network refusal', () => {
     for (const source of ['COINGECKO_SUPPLY_PARTIAL', 'COINGECKO_IDENTITY_PARTIAL']) {
       const input = { ...base(), snapshot: { ...noFdv(), errors: [`${source}: 1/1 not verified`] } };
-      expect(changeDataNotice(input)?.title).toBe('FDV 数据暂不可用');
+      expect(changeDataNotice(input)?.title).toBe('估值数据暂不可用');
       expect(changeDataNotice(input)?.retryAt).toBeUndefined();
     }
+  });
+  it('includes independent Binance market-cap failures and their known retry time', () => {
+    const input = { ...base(), snapshot: { ...noFdv(), errors: [
+      `BINANCE_MARKET_CAP: TESTUSDT: RATE_LIMIT_COOLDOWN: fapi.binance.com 等待至 ${new Date(now + 60_000).toISOString()}`,
+    ] } };
+    const notice = changeDataNotice(input);
+    expect(notice).toMatchObject({ title: '供应量服务限流中', retryAt: now + 60_000, blocksAllMatches: true });
+    expect(notice?.detail).toContain('Binance 转引 CoinMarketCap');
+    expect(notice?.detail).not.toContain('CoinGecko');
+  });
+  it('does not call a bounded market-cap batch budget a provider access failure', () => {
+    const input = { ...base(), snapshot: { ...noFdv(), errors: ['BINANCE_MARKET_CAP_BUDGET: 流通量补取达到 4 秒预算'] } };
+    expect(changeDataNotice(input)).toMatchObject({ title: '流通市值补取分批进行中', severity: 'info', blocksAllMatches: true });
+    expect(changeDataNotice(input)?.detail).toContain('已取得的 OI 保留');
+    expect(changeDataNotice(input)?.retryAt).toBeUndefined();
   });
   it('applies current endpoint and price source guards even before the snapshot expires', () => {
     for (const [priceTime, evaluatedAt] of [[now - 89_000, now + 2_000], [now + 1000, now]] as const) {
@@ -123,7 +147,7 @@ describe('consumer-facing change availability', () => {
   });
   it('makes partial FDV availability visible even when AND already yields below-threshold', () => {
     const result = changeDataNotice({ ...base(), snapshot: snapshot({ universe: { assets: 2, contracts: 2 } }), rows: [row(), row({ fdvPct: null, fdvMatched: null })] });
-    expect(result?.title).toBe('部分 FDV 数据不可用');
+    expect(result?.title).toBe('部分估值数据不可用');
     expect(result?.detail).toContain('1/2');
   });
   it('gives stale data precedence over all other source and baseline messages', () => {

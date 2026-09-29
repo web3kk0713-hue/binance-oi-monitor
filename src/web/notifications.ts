@@ -1,4 +1,5 @@
 import type { AlertEvent, Thresholds } from '../shared/types';
+import { valuationLabel } from '../shared/valuation';
 import { loadPushRegistration, savePushRegistration } from './storage';
 import { percent } from './format';
 
@@ -20,8 +21,9 @@ export async function requestNotifications(): Promise<boolean> {
 export async function showAlertNotification(event: AlertEvent, test = false): Promise<void> {
   if (!notificationSupport() || Notification.permission !== 'granted') return;
   const worker = await registerNotifications();
-  await worker.showNotification(test ? 'OI 监测 · 测试提醒' : `${event.symbol} · OI/FDV 达到 ${percent(event.ratio)}`, {
-    body: test ? '系统通知已就绪。这是一条测试消息，不代表实时行情。' : `已触发${event.level === 'critical' ? '强' : event.level === 'danger' ? '红色' : '黄色'}提醒。点击查看该币种和数据来源。`,
+  const label = valuationLabel(event.valuationBasis === undefined ? 'fdv' : event.valuationBasis);
+  await worker.showNotification(test ? 'OI 监测 · 测试提醒' : `${event.symbol} · OI/${label} 达到 ${percent(event.ratio)}`, {
+    body: test ? '系统通知已就绪。这是一条测试消息，不代表实时行情。' : `OI / ${label} 已触发${event.level === 'critical' ? '强' : event.level === 'danger' ? '红色' : '黄色'}提醒。点击查看该币种和数据来源。`,
     icon: new URL('favicon.svg', document.baseURI).href,
     tag: test ? 'oi-test-notification' : event.id,
     requireInteraction: !test && event.level === 'critical',

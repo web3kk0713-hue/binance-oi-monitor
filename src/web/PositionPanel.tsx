@@ -7,6 +7,7 @@ import { assessDirection } from '../shared/direction';
 import { DirectionPanel } from './DirectionPanel';
 import { useDirectionSettings } from './DirectionSettingsContext';
 import { MetricHelp } from './MetricHelp';
+import { valuationLabel } from '../shared/valuation';
 import './position.css';
 
 const MarketPlanPanel = lazy(() => import('./MarketPlanPanel'));
@@ -45,6 +46,7 @@ export function PositionPanel({ value, flow, now, assetId, preferredMarketKey, r
   const context = useMemo(() => selectFlowContext(flow, selectedAssetId, now, preferredMarketKey), [flow, selectedAssetId, now, preferredMarketKey]);
   const direction = useMemo(() => assessDirection(flow, selectedAssetId, now, preferredMarketKey, config), [flow, selectedAssetId, now, preferredMarketKey, config]);
   const funding = context.futures;
+  const valuationName = valuationLabel(value?.valuationBasis === undefined ? value ? 'fdv' : null : value.valuationBasis);
   return <section className="position-panel" aria-label="当前标的持仓与价格联动">
     <div className="position-heading"><div><h2>{value?.symbol ?? '等待标的'}<small>市场持仓联动 · 非个人持仓</small></h2></div>
       <div className="position-heading-state">{value && !loading ? <PositionBadge value={value}/> : <span className="position-badge unavailable">{loading ? '读取起点' : '等待数据'}</span>}<small>{value ? `过去 ${value.windowMinutes} 分钟变化 · ${clockTime(value.endAt)}` : '尚无观测'}</small></div></div>
@@ -57,17 +59,17 @@ export function PositionPanel({ value, flow, now, assetId, preferredMarketKey, r
     <div className="position-primary">
       <div><span>OI 数量变化<MetricHelp label="OI 数量变化">OI 是尚未平仓的合约数量。这里将同币种合约按倍率归一后求和，比较所选窗口起止值；上涨表示未平仓数量增加，不等于净资金流入或多头增加。</MetricHelp></span><strong className={valueClass(value?.oiQuantityPct ?? null)}>{signed(value?.oiQuantityPct ?? null, '%', 3)}</strong><small>归一化币数量，不含价格涨跌</small></div>
       <div><span>价格变化<MetricHelp label="价格变化">与 OI 比较同一对快照的指数价格：（终点 ÷ 起点 − 1）×100%。这是窗口净变化，不代表中间一直上涨或下跌。</MetricHelp></span><strong className={valueClass(value?.pricePct ?? null)}>{signed(value?.pricePct ?? null, '%', 3)}</strong><small>同一对快照端点 · 指数价格</small></div>
-      <div className="position-ratio"><span>OI / FDV 占比<MetricHelp label="OI / FDV 占比">合约 OI 美元名义金额 ÷ FDV ×100%，比较未平仓合约规模与完全稀释估值。它不是账户杠杆、持币比例或投入本金。</MetricHelp></span><strong>{percent(value?.oiToFdvPct)}</strong><small>相对变化 <b className={valueClass(value?.oiToFdvChangePct ?? null)}>{signed(value?.oiToFdvChangePct ?? null, '%', 3)}</b><MetricHelp label="占比相对变化与百分点">占比从 10% 到 12%：相对变化为 +20%，占比差为 +2 个百分点。这里比较占比本身，不是将 OI 涨跌幅除以 FDV 涨跌幅。</MetricHelp></small><small>占比差 {signed(value?.oiToFdvDeltaPp ?? null, ' 个百分点', 3)}</small></div>
-      <div><span>FDV 变化<MetricHelp label="FDV 变化">FDV 为价格 × 已核实最大供应量；窗口内涨跌可由价格或供应口径变化造成。供应固定时通常接近价格变化，不是独立的买卖确认。</MetricHelp></span><strong className={valueClass(value?.fdvPct ?? null)}>{signed(value?.fdvPct ?? null, '%', 3)}</strong><small>美元 OI 变化 {signed(value?.oiUsdPct ?? null, '%', 3)}<MetricHelp label="美元 OI 变化">以美元计价的未平仓合约名义金额变化，同时受合约数量和价格影响；不是新增本金或保证金。</MetricHelp></small></div>
+      <div className="position-ratio"><span>OI / {valuationName} 占比<MetricHelp label={`OI / ${valuationName} 占比`}>合约 OI 美元名义金额 ÷ 选定估值 ×100%；优先 FDV，缺失时使用有效流通市值。它不是账户杠杆、持币比例或投入本金。</MetricHelp></span><strong>{percent(value?.oiToFdvPct)}</strong><small>相对变化 <b className={valueClass(value?.oiToFdvChangePct ?? null)}>{signed(value?.oiToFdvChangePct ?? null, '%', 3)}</b><MetricHelp label="占比相对变化与百分点">占比从 10% 到 12%：相对变化为 +20%，占比差为 +2 个百分点。这里比较占比本身，不是将 OI 涨跌幅除以估值涨跌幅。两端估值口径不同不计算变化。</MetricHelp></small><small>占比差 {signed(value?.oiToFdvDeltaPp ?? null, ' 个百分点', 3)}</small></div>
+      <div><span>{valuationName}变化<MetricHelp label={`${valuationName}变化`}>FDV 使用最大供应量，流通市值使用流通供应量；优先 FDV，缺失时使用有效流通市值。窗口内涨跌可由价格或供应口径变化造成。供应固定时通常接近价格变化，不是独立的买卖确认。</MetricHelp></span><strong className={valueClass(value?.fdvPct ?? null)}>{signed(value?.fdvPct ?? null, '%', 3)}</strong><small>美元 OI 变化 {signed(value?.oiUsdPct ?? null, '%', 3)}<MetricHelp label="美元 OI 变化">以美元计价的未平仓合约名义金额变化，同时受合约数量和价格影响；不是新增本金或保证金。</MetricHelp></small></div>
     </div>
-    {value?.pattern === 'unavailable' || value?.issues.length || value?.supplyChanged ? <p className="position-visible-warning">{value.supplyChanged ? '供给口径有变化：FDV 变化不能全部解释为价格。 ' : ''}{value.pattern === 'unavailable' ? value.reason : value.issues.join('；')}</p> : null}
+    {value?.pattern === 'unavailable' || value?.issues.length || value?.supplyChanged ? <p className="position-visible-warning">{value.supplyChanged ? '供给口径有变化：估值变化不能全部解释为价格。 ' : ''}{value.pattern === 'unavailable' ? value.reason : value.issues.join('；')}</p> : null}
     <div className="position-confirmation"><TradeContext venue="合约" row={context.futures}/><TradeContext venue="现货" row={context.spot}/>
       <div className="position-flow-cell"><span>当前资金费率<MetricHelp label="资金费率">永续合约多空之间的周期性费用率：正值通常多付空，负值通常空付多。按交易所实际周期结算，不是币价涨跌幅；当前值不保证等于下次实际结算值，周期未知不假定 8 小时。</MetricHelp></span><strong>{signed(funding?.fundingRate == null ? null : funding.fundingRate * 100, '%', 5)}</strong>
         <small>{funding?.fundingRate != null ? `${funding.symbol} · ${funding.fundingIntervalHours ? `每 ${funding.fundingIntervalHours} 小时` : '周期待核实'}` : funding?.reason ?? '尚无有效资金费率'}</small>
         <small>{funding?.nextFundingTime ? `下次结算 ${dateTime(funding.nextFundingTime)}` : '结算时间未核实'}</small></div>
     </div>
-    <details className="position-method"><summary>计算口径与数据边界</summary><p>成交为单交易对最近完整 5m，非上方快照的精确同步窗口；未覆盖或过期显示 —。</p><p>数量 OI 上升说明未平仓合约数量增加，每笔合约同时存在多空双方。OI / FDV 是名义额占比，不是账户实际杠杆。占比相对变化 =（末占比 ÷ 初占比 − 1）× 100%，不是两个涨跌幅相除。</p>
-      <p>供给固定时，FDV 涨跌幅接近价格涨跌幅；占比变化通常接近数量 OI 变化。这些不是相互独立的确认信号。联动标签仅描述端点，不证明中间连续走势；尚未回测盈利能力。</p>
+    <details className="position-method"><summary>计算口径与数据边界</summary><p>成交为单交易对最近完整 5m，非上方快照的精确同步窗口；未覆盖或过期显示 —。</p><p>数量 OI 上升说明未平仓合约数量增加，每笔合约同时存在多空双方。OI / {valuationName} 是名义额占比，不是账户实际杠杆。占比相对变化 =（末占比 ÷ 初占比 − 1）× 100%，不是两个涨跌幅相除。</p>
+      <p>估值（FDV优先）在供给固定时，涨跌幅通常接近价格涨跌幅；占比变化通常接近数量 OI 变化。这些不是相互独立的确认信号。联动标签仅描述端点，不证明中间连续走势；尚未回测盈利能力。</p>
       <p>合约与现货成交使用各自最近 5 根完整 1m K 线，可能与上方快照窗口不同。净主动成交 = 主动买额 − 主动卖额，不是资金净流入；各交易对按原报价币展示。当前观察标的现货按需采集，未覆盖、预热或过期显示 —。</p>
       <p>{value?.startAt ? `快照比较：${dateTime(value.startAt)} → ${dateTime(value.endAt)}。` : '缺少有效历史起点时，只显示可验证的当前占比。'}资金费率为当前观测值，不保证下一次实际结算费率。</p>
     </details>

@@ -297,7 +297,7 @@ describe('risk center historical-event semantics', () => {
     const html = renderRisks();
     expect(html).toContain('暂无持仓退出记录'); expect(html).toContain('前往我的持仓');
     expect(html).toContain('本机记录，关页后不监控。触发提醒不代表已成交或已平仓。');
-    expect(html).toContain('持仓退出'); expect(html).toContain('市场异常'); expect(html).toContain('OI / FDV');
+    expect(html).toContain('持仓退出'); expect(html).toContain('市场异常'); expect(html).toContain('OI / 估值');
   });
   it('includes event identity, plan revision and gap context without running a callback', () => {
     const result = triggered(21_000); mock.runtime = runtime([result.state], result.events);

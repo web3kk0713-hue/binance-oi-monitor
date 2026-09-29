@@ -5,6 +5,7 @@ import { BASELINE_TOLERANCE_MS, compareMetric, latestEndpointIssue, oiChangeIssu
   type ChangeResult, type ChangeRule } from '../shared/changeMonitor';
 import type { HistoryPoint } from '../shared/types';
 import { relativeChange } from '../shared/history';
+import { selectValuation, valuationPair } from '../shared/valuation';
 import { Chart } from './Charts';
 import { dateTime, escapeHtml, signed } from './format';
 
@@ -38,8 +39,10 @@ export function prepareChangeChart(points: HistoryPoint[], result: ChangeResult,
       const change = value !== null && base !== null && Number.isFinite(value) && Number.isFinite(base) && value >= 0 && base > 0 ? relativeChange(value, base) : null;
       return change !== null && Number.isFinite(change) ? change : null;
     };
+    const valuation = valuationPair(point, baseline);
     output.push({ at: point.timestamp, oi: oiValid ? safeChange(oiValue, baseOi) : null,
-      fdv: valid(point, point.priceSourceTime) && valid(baseline, baseline.priceSourceTime) ? safeChange(point.fdvUsd, baseline.fdvUsd) : null });
+      fdv: !valuation.issue && valid(point, point.priceSourceTime) && valid(baseline, baseline.priceSourceTime)
+        ? safeChange(valuation.latest.valueUsd, valuation.baseline.valueUsd) : null });
   }
   return output;
 }
@@ -69,9 +72,10 @@ export function preparePositionChart(points: HistoryPoint[], result: ChangeResul
   }
   const asFinite = (value: Decimal) => Number.isFinite(value.toNumber()) ? value.isZero() ? 0 : value.toNumber() : null;
   const ratio = (point: HistoryPoint): Decimal | null => {
-    if (point.oiUsd === null || !Number.isFinite(point.oiUsd) || point.oiUsd < 0 || !positive(point.fdvUsd)
+    const valuation = selectValuation(point);
+    if (point.oiUsd === null || !Number.isFinite(point.oiUsd) || point.oiUsd < 0 || !positive(valuation.valueUsd)
       || !positive(point.priceUsd) || Math.abs(point.oiSourceTime! - point.priceSourceTime!) > 30_000) return null;
-    const value = new ExactDecimal(point.oiUsd).div(point.fdvUsd).times(100);
+    const value = new ExactDecimal(point.oiUsd).div(valuation.valueUsd).times(100);
     return asFinite(value) === null ? null : value;
   };
   const baseRatio = oiChangeIssue(baseline, baseline, baseline.availableAt, 'usd') ? null : ratio(baseline);
@@ -84,14 +88,15 @@ export function preparePositionChart(points: HistoryPoint[], result: ChangeResul
     const observationIssue = latestEndpointIssue(result.assetId, point, point.availableAt!);
     const oiIssue = observationIssue ?? oiChangeIssue(point, baseline, point.availableAt!, rule.oiBasis);
     const priceIssue = observationIssue ?? priceChangeIssue(point, baseline, point.availableAt!);
-    const ratioIssue = observationIssue ?? oiChangeIssue(point, baseline, point.availableAt!, 'usd');
+    const valuation = valuationPair(point, baseline);
+    const ratioIssue = observationIssue ?? valuation.issue ?? oiChangeIssue(point, baseline, point.availableAt!, 'usd');
     const currentRatio = ratioIssue ? null : ratio(point);
     const ratioChange = baseRatio?.greaterThan(0) && currentRatio !== null
       ? asFinite(currentRatio.div(baseRatio).minus(1).times(100)) : null;
     const oiKey = rule.oiBasis === 'quantity' ? 'oiQuantity' : 'oiUsd';
     output.push({ at: point.timestamp,
       oi: compareMetric(point[oiKey], baseline[oiKey], DISPLAY_ONLY, oiIssue).pct,
-      fdv: compareMetric(point.fdvUsd, baseline.fdvUsd, DISPLAY_ONLY, priceIssue).pct,
+      fdv: compareMetric(valuation.latest.valueUsd, valuation.baseline.valueUsd, DISPLAY_ONLY, priceIssue ?? valuation.issue).pct,
       price: compareMetric(point.priceUsd, baseline.priceUsd, DISPLAY_ONLY, priceIssue).pct,
       ratio: ratioChange,
     });
@@ -106,7 +111,8 @@ export default function ChangeChart({ points, result, rule, loading, now = Date.
   const [showRatio, setShowRatio] = useState(false);
   const historicalOnly = Boolean(latestEndpointIssue(result.assetId, result.latest, now)
     || oiChangeIssue(result.latest, result.latest, now, rule.oiBasis) || priceChangeIssue(result.latest, result.latest, now));
-  const ratioName = 'OI/FDV 占比相对变化';
+  const valuationName = selectValuation(result.baseline ?? result.latest).label;
+  const ratioName = `OI/${valuationName} 占比相对变化`;
   const option = useMemo<EChartsOption>(() => {
     const line = (key: 'oi' | 'fdv' | 'price' | 'ratio', name: string, color: string, dashed = false) => ({ name, type: 'line' as const, showSymbol: prepared.filter(point => point[key] !== null).length < 20,
       connectNulls: false, data: prepared.map(point => [point.at, point[key]]), lineStyle: { color, width: 2, type: dashed ? 'dashed' as const : 'solid' as const }, itemStyle: { color },
@@ -120,11 +126,11 @@ export default function ChangeChart({ points, result, rule, loading, now = Date.
         return values.length ? `${escapeHtml(dateTime(values[0].value[0]))}<br/>` + values.map(item => `${escapeHtml(item.seriesName)} ${escapeHtml(signed(item.value[1], '%', 4))}`).join('<br/>') : '';
       } },
       series: [line('oi', rule.oiBasis === 'quantity' ? 'OI 数量涨跌幅' : 'OI 金额涨跌幅', '#0875e1'),
-        line('fdv', 'FDV 涨跌幅', '#8867be'), line('price', '价格涨跌幅', '#16866b', true), line('ratio', ratioName, '#a47a21', true)] };
-  }, [prepared, result.startAt, result.endAt, rule.windowMinutes, rule.oiBasis, showRatio]);
+        line('fdv', `${valuationName} 涨跌幅`, '#8867be'), line('price', '价格涨跌幅', '#16866b', true), line('ratio', ratioName, '#a47a21', true)] };
+  }, [prepared, result.startAt, result.endAt, rule.windowMinutes, rule.oiBasis, showRatio, valuationName, ratioName]);
   if (!prepared.some(point => point.oi !== null || point.fdv !== null || point.price !== null || point.ratio !== null)) return <div className="change-empty"><strong>{loading ? '读取曲线…' : '缺少有效比较起点'}</strong><span>保留空值，不从最新值倒推历史。</span></div>;
-  return <><div className="change-chart-note"><label><input type="checkbox" checked={showRatio} onChange={event => setShowRatio(event.target.checked)}/> 显示 OI/FDV 占比相对变化</label></div>
-    <Chart option={option} label={`${result.symbol} ${rule.oiBasis === 'quantity' ? 'OI数量' : 'OI美元金额'}、FDV、价格和可选OI/FDV占比相对同一观测起点的变化，单位%，缺口断线`} className="change-chart"/>
-    <p className="change-chart-note">历史观测截至 {dateTime(result.endAt)}{historicalOnly ? '（端点已过期或不可用，不代表当前值）' : ''} · 共同起点 = 0%</p>
+  return <><div className="change-chart-note"><label><input type="checkbox" checked={showRatio} onChange={event => setShowRatio(event.target.checked)}/> 显示 {ratioName}</label></div>
+    <Chart option={option} label={`${result.symbol} ${rule.oiBasis === 'quantity' ? 'OI数量' : 'OI美元金额'}、${valuationName}、价格和可选OI/${valuationName}占比相对同一观测起点的变化，单位%，缺口或估值口径切换时断线`} className="change-chart"/>
+    <p className="change-chart-note">历史观测截至 {dateTime(result.endAt)}{historicalOnly ? '（端点已过期或不可用，不代表当前值）' : ''} · 共同起点 = 0% · 估值口径切换时断线</p>
     {loading ? <p className="change-chart-note">正在读取中间观测；仅绘制已取得点。</p> : null}</>;
 }

@@ -52,11 +52,11 @@ describe('OI and price observational context', () => {
     expect(result).toMatchObject({ oiQuantityPct: 0, oiUsdPct: 10, pricePct: 10, fdvPct: 10,
       oiToFdvPct: 10, oiToFdvChangePct: 0, oiToFdvDeltaPp: 0, pattern: 'quiet', supplyChanged: false });
   });
-  it('keeps price and OI context when FDV or max supply is unavailable', () => {
-    const result = run({ fdvUsd: null, priceUsd: 10.1 }, { fdvUsd: null });
+  it('keeps price and OI context when both valuation denominators are unavailable', () => {
+    const result = run({ fdvUsd: null, marketCapUsd: null, priceUsd: 10.1 }, { fdvUsd: null, marketCapUsd: null });
     expect(result).toMatchObject({ oiQuantityPct: 5, oiUsdPct: 5, pricePct: 1, fdvPct: null,
       oiToFdvPct: null, oiToFdvChangePct: null, oiToFdvDeltaPp: null, pattern: 'build_up', supplyChanged: false });
-    expect(result.issues.some(issue => issue.startsWith('FDV：'))).toBe(true);
+    expect(result.issues.some(issue => issue.startsWith('估值：'))).toBe(true);
   });
   it('does not manufacture missing history from current asset values or cached ratio fields', () => {
     const result = run({ oiToFdv: 9999, priceUsd: null, fdvUsd: null });
@@ -91,7 +91,7 @@ describe('ratio levels, relative changes and percentage points', () => {
       oiToFdvPct: 0, oiToFdvChangePct: -100, oiToFdvDeltaPp: -10, pattern: 'unwind_flat' });
     expect(run({}, { oiQuantity: 0, oiUsd: 0 })).toMatchObject({ oiQuantityPct: null, oiUsdPct: null,
       oiToFdvPct: 10.5, oiToFdvChangePct: null, oiToFdvDeltaPp: 10.5, pattern: 'unavailable' });
-    expect(run({ fdvUsd: 0 })).toMatchObject({ fdvPct: -100, oiToFdvPct: null,
+    expect(run({ fdvUsd: 0 })).toMatchObject({ fdvPct: null, oiToFdvPct: 13.125, valuationBasis: 'marketCap',
       oiToFdvChangePct: null, oiToFdvDeltaPp: null, pattern: 'build_flat' });
     expect(run({}, { fdvUsd: 0 })).toMatchObject({ fdvPct: null, oiToFdvPct: 10.5,
       oiToFdvChangePct: null, oiToFdvDeltaPp: null });
@@ -99,8 +99,8 @@ describe('ratio levels, relative changes and percentage points', () => {
   it.each([null, NaN, Infinity, -1])('rejects invalid price without suppressing valid native OI: %s', priceUsd => {
     expect(run({ priceUsd })).toMatchObject({ oiQuantityPct: 5, pricePct: null, pattern: 'unavailable', oiToFdvPct: null });
   });
-  it.each([null, NaN, Infinity, -1])('rejects invalid FDV without suppressing valid price: %s', fdvUsd => {
-    expect(run({ fdvUsd })).toMatchObject({ oiQuantityPct: 5, pricePct: 0, fdvPct: null,
+  it.each([null, NaN, Infinity, -1])('rejects invalid FDV and absent fallback without suppressing valid price: %s', fdvUsd => {
+    expect(run({ fdvUsd, marketCapUsd: null })).toMatchObject({ oiQuantityPct: 5, pricePct: 0, fdvPct: null,
       oiToFdvPct: null, oiToFdvChangePct: null, pattern: 'build_flat' });
   });
   it.each([null, NaN, Infinity, -1])('rejects invalid OI values independently: %s', oi => {

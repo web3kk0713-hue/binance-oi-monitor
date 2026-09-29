@@ -25,9 +25,16 @@ function row(symbol: string, at: number, factor: number, fdvFactor: number, miss
 async function seed(at: number) {
   for (let index = 0; index <= 12; index++) {
     const time = at - (12 - index) * 30_000, progress = Math.max(0, index - 2) / 10;
-    const assets = [row('TEST_UP', time, 1 + 0.06 * progress, 1 + 0.04 * progress), row('TEST_DOWN', time, 1 - 0.08 * progress, 1 - 0.05 * progress), row('TEST_MISSING', time, 1 + 0.1 * progress, 1, true)];
+    const cap = row('TEST_CAP', time, 1 + 0.07 * progress, 1 + 0.03 * progress);
+    cap.fdvUsd = null; cap.oiToFdv = null; cap.maxSupply = null;
+    cap.oiToMarketCap = cap.oiUsd! / cap.marketCapUsd! * 100;
+    cap.supplyUpdatedAt = null; cap.supplySource = null; cap.mappingStatus = 'unmapped'; cap.evidence.supply = null;
+    cap.evidence.marketCap = { provider: 'Binance', upstream: 'CoinMarketCap', contractSymbol: 'TEST_CAPUSDT',
+      circulatingSupply: 1000, unitMultiplier: 1, sourceTime: time - 1000, fetchedAt: time - 1000,
+      url: 'https://fapi.binance.com/futures/data/openInterestHist?symbol=TEST_CAPUSDT&period=5m&limit=1' };
+    const assets = [row('TEST_UP', time, 1 + 0.06 * progress, 1 + 0.04 * progress), row('TEST_DOWN', time, 1 - 0.08 * progress, 1 - 0.05 * progress), row('TEST_MISSING', time, 1 + 0.1 * progress, 1, true), cap];
     const snapshot: Snapshot = { schemaVersion: 1, mode: 'server', startedAt: time - 1500, asOf: time, durationMs: 1500,
-      collectionIntervalMs: 30_000, universe: { assets: 3, contracts: 3 }, coverage: { oi: 3, marketCap: 2, fdv: 2, eligible: 2, failedContracts: 0 },
+      collectionIntervalMs: 30_000, universe: { assets: 4, contracts: 4 }, coverage: { oi: 4, marketCap: 3, fdv: 2, eligible: 3, failedContracts: 0 },
       errors: ['仅本机验收：合成样本，不是真实行情'], assets };
     await store.commitCollection(snapshot, {}, []);
   }

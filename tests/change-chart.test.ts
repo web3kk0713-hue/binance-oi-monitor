@@ -56,7 +56,7 @@ describe('OI / FDV chart endpoint consistency', () => {
     const at = start + 90_000;
     const values = chart([point(at, { oiQuantity: 0, fdvUsd: 0 })]).values;
     expect(values.find(value => value.at === start + 30_000)).toEqual({ at: start + 30_000, oi: null, fdv: null });
-    expect(values.find(value => value.at === at)).toEqual({ at, oi: -100, fdv: -100 });
+    expect(values.find(value => value.at === at)).toEqual({ at, oi: -100, fdv: null });
   });
 
   it('preserves each independent metric when the other baseline is zero or missing', () => {
@@ -106,6 +106,29 @@ function positionChart(points: HistoryPoint[] = [], initial = point(start, { pri
 }
 
 describe('price and OI/FDV level-relative historical curves', () => {
+  it('uses explicitly labeled market-cap changes and ratios without rewriting raw FDV', () => {
+    const initial = point(start, { priceUsd: 10, fdvUsd: null, marketCapUsd: 10_000 });
+    const latest = point(end, { priceUsd: 10.5, fdvUsd: null, marketCapUsd: 10_500, oiQuantity: 110, oiUsd: 1150 });
+    const { result, values } = positionChart([], initial, latest);
+    expect(values.at(-1)).toMatchObject({ oi: 10, fdv: 5, price: 5 });
+    expect(values.at(-1)?.ratio).toBeCloseTo(9.5238095238, 8);
+    expect(prepareChangeChart([], result, DEFAULT_CHANGE_RULE).at(-1)?.fdv).toBeCloseTo(5);
+    const html = renderToStaticMarkup(createElement(ChangeChart, { points: [], result, rule: DEFAULT_CHANGE_RULE, loading: false, now: end }));
+    expect(html).toContain('显示 OI/流通市值 占比相对变化');
+    expect(html).not.toContain('显示 OI/FDV 占比相对变化');
+    expect(initial.fdvUsd).toBeNull(); expect(latest.fdvUsd).toBeNull();
+  });
+
+  it('breaks only valuation-dependent curves when an interior observation switches valuation basis', () => {
+    const at = start + 30_000;
+    const switched = point(at, { priceUsd: 10.2, fdvUsd: null, marketCapUsd: 5100 });
+    const { result, values } = positionChart([switched]);
+    expect(values.find(value => value.at === at)).toMatchObject({ oi: 0, fdv: null, price: 2, ratio: null });
+    expect(prepareChangeChart([switched], result, DEFAULT_CHANGE_RULE).find(value => value.at === at)?.fdv).toBeNull();
+    expect(values.at(-1)?.fdv).toBe(5);
+    const switchedEnd = positionChart([], undefined, point(end, { priceUsd: 10.5, fdvUsd: null, marketCapUsd: 5250 }));
+    expect(switchedEnd.values.at(-1)).toMatchObject({ fdv: null, ratio: null, price: 5 });
+  });
   it('compares all four series with the exact same baseline, not a division of percentage changes', () => {
     const { values } = positionChart();
     expect(values[0]).toEqual({ at: start, oi: 0, fdv: 0, price: 0, ratio: 0 });

@@ -5,7 +5,7 @@ export class SourceError extends Error {
   }
 }
 
-type Governor = { cooldowns: Map<string, number>; limit: number; minute: number; used: number; backgroundUsed: number; blocked: number; backgroundBlocked: number };
+type Governor = { cooldowns: Map<string, number>; limit: number; minute: number; used: number; backgroundUsed: number; blocked: number; backgroundBlocked: number; historyCalls: number[] };
 const governors = new WeakMap<typeof fetch, Governor>();
 const GOVERNOR_KEY = 'oi-monitor:v1:source-budget:v1';
 export function binanceRequestWeight(url: URL): number {
@@ -19,7 +19,7 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number, o
   let active = 0;
   const waiters: Array<() => void> = [];
   let governor = governors.get(fetcher);
-  if (!governor) { governor = { cooldowns: new Map(), limit: 1200, minute: -1, used: 0, backgroundUsed: 0, blocked: 0, backgroundBlocked: 0 }; governors.set(fetcher, governor); }
+  if (!governor) { governor = { cooldowns: new Map(), limit: 1200, minute: -1, used: 0, backgroundUsed: 0, blocked: 0, backgroundBlocked: 0, historyCalls: [] }; governors.set(fetcher, governor); }
   const budgetState = governor;
   const cooldowns = budgetState.cooldowns;
   const background = options.priority === 'background';
@@ -35,6 +35,11 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number, o
         if (Number.isSafeInteger(saved.used) && saved.used >= 0) budgetState.used = Math.max(budgetState.used, saved.used);
         if (Number.isSafeInteger(saved.backgroundUsed) && saved.backgroundUsed >= 0) budgetState.backgroundUsed = Math.max(budgetState.backgroundUsed, saved.backgroundUsed);
       }
+      if (Array.isArray(saved.historyCalls)) {
+        const recent = saved.historyCalls.filter((at: unknown): at is number => typeof at === 'number'
+          && Number.isSafeInteger(at) && at <= Date.now() && at > Date.now() - 300_000).slice(-800);
+        if (recent.length > budgetState.historyCalls.length) budgetState.historyCalls = recent;
+      }
       for (const [host, at] of Object.entries(saved.cooldowns ?? {})) {
         if (['fapi.binance.com', 'api.binance.com', 'api.coingecko.com', 'pro-api.coinmarketcap.com'].includes(host)
           && typeof at === 'number' && Number.isSafeInteger(at) && at > Date.now() && at < 8_640_000_000_000_000) cooldowns.set(host, Math.max(cooldowns.get(host) ?? 0, at));
@@ -44,12 +49,13 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number, o
   function persist() {
     if (!persistent) return;
     try { localStorage.setItem(GOVERNOR_KEY, JSON.stringify({ limit: budgetState.limit, minute: budgetState.minute,
-      used: budgetState.used, backgroundUsed: budgetState.backgroundUsed,
+      used: budgetState.used, backgroundUsed: budgetState.backgroundUsed, historyCalls: budgetState.historyCalls,
       cooldowns: Object.fromEntries([...cooldowns].filter(([, at]) => at > Date.now())) })); } catch { /* No secret or market history is stored here. */ }
   }
   // A conservative bootstrap budget is replaced by exchangeInfo's current limit.
   // Keep 20% free for metadata, other clients on the same IP, and in-flight requests.
   function refreshWeightWindow() {
+    budgetState.historyCalls = budgetState.historyCalls.filter(at => at > Date.now() - 300_000);
     const minute = Math.floor(Date.now() / 60_000);
     if (minute !== budgetState.minute) { budgetState.minute = minute; budgetState.used = 0; budgetState.backgroundUsed = 0; budgetState.blocked = 0; budgetState.backgroundBlocked = 0; }
     mergeStored();
@@ -71,6 +77,15 @@ export function createSourceClient(fetcher: typeof fetch, concurrency: number, o
   function reserveWeight(url: URL) {
     if (url.hostname !== 'fapi.binance.com') return;
     refreshWeightWindow();
+    // OI statistics has a separate 1000 requests / rolling 5m IP limit. Share an 80%
+    // budget across supply fallback and historical recovery, without pausing live OI.
+    if (url.pathname === '/futures/data/openInterestHist') {
+      if (budgetState.historyCalls.length >= 800) {
+        const reset = budgetState.historyCalls[0]! + 300_000;
+        throw new SourceError('RATE_LIMIT_HISTORY_BUDGET', url.href, `OI 历史与流通量配额保护，等待至 ${new Date(reset).toISOString()}`, reset);
+      }
+      budgetState.historyCalls.push(Date.now());
+    }
     const weight = binanceRequestWeight(url);
     const budget = Math.floor(budgetState.limit * 0.8);
     if (budgetState.used + weight > budget || background && budgetState.backgroundUsed + weight > Math.floor(budgetState.limit * 0.2)) {

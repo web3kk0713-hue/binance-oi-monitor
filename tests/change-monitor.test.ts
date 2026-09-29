@@ -104,8 +104,8 @@ describe('independent OI and FDV endpoint changes', () => {
     expect(run({ oiQuantity: 0.285 }, { oiQuantity: 0.3 }, rule({ oi: condition({ direction: 'down' }) })).oiPct).toBe(-5);
     expect(run({ oiQuantity: 0.285 }, { oiQuantity: 0.3 }, rule({ oi: condition({ direction: 'down' }) })).oiMatched).toBe(true);
   });
-  it('allows a real zero final value but never divides by a zero initial value', () => {
-    expect(run({ oiQuantity: 0, fdvUsd: 0 })).toMatchObject({ oiPct: -100, fdvPct: -100, status: 'hit' });
+  it('allows a real zero final OI but does not treat switching from zero FDV as a valuation return', () => {
+    expect(run({ oiQuantity: 0, fdvUsd: 0 })).toMatchObject({ oiPct: -100, fdvPct: null, status: 'unavailable', valuationBasis: 'marketCap' });
     expect(run({}, { oiQuantity: 0 })).toMatchObject({ oiPct: null, oiMatched: null, fdvPct: 3, status: 'unavailable' });
     expect(run({}, { fdvUsd: 0 })).toMatchObject({ oiPct: 5, fdvPct: null, fdvMatched: null, status: 'unavailable' });
   });
@@ -187,11 +187,11 @@ describe('three-valued condition composition', () => {
   });
   it('retains the unavailable metric reason even when the whole rule has a known outcome', () => {
     const hit = run({ fdvUsd: null }, {}, rule({ combine: 'any' }));
-    expect(hit.reason).toContain('FDV：端点数值缺失或无效');
+    expect(hit.reason).toContain('流通市值：估值口径切换');
     expect(hit.fdvMatched).toBeNull();
     const below = run({ oiQuantity: 101, fdvUsd: null });
     expect(below.status).toBe('below');
-    expect(below.reason).toContain('FDV：端点数值缺失或无效');
+    expect(below.reason).toContain('流通市值：估值口径切换');
   });
   it.each(['all', 'any'] as const)('ignores disabled conditions in %s mode without hiding displayable changes', combine => {
     const oiOnly = rule({ combine, fdv: condition({ enabled: false }) });

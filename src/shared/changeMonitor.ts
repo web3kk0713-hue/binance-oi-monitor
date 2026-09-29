@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
-import type { AssetRow, HistoryPoint } from './types';
+import type { AssetRow, HistoryPoint, ValuationBasis } from './types';
+import { selectValuation, valuationPair } from './valuation';
 
 export type ChangeDirection = 'up' | 'down' | 'either';
 export interface ChangeCondition { enabled: boolean; direction: ChangeDirection; threshold: number; }
@@ -7,6 +8,7 @@ export interface ChangeRule {
   windowMinutes: number;
   oiBasis: 'quantity' | 'usd';
   oi: ChangeCondition;
+  /** Legacy persisted key: now applies to FDV, falling back to circulating market cap. */
   fdv: ChangeCondition;
   combine: 'all' | 'any';
 }
@@ -18,6 +20,8 @@ export interface ChangeResult {
   status: 'hit' | 'below' | 'unavailable'; reason: string;
   startAt: number | null; endAt: number;
   baseline: HistoryPoint | null; latest: HistoryPoint;
+  /** fdvPct/fdvMatched remain compatibility keys for the selected valuation. */
+  valuationBasis?: ValuationBasis | null;
 }
 
 export const DEFAULT_CHANGE_RULE: ChangeRule = {
@@ -148,18 +152,20 @@ export function analyzeChange(asset: AssetRow, latest: HistoryPoint, baseline: H
   rule: ChangeRule, now: number): ChangeResult {
   const result: ChangeResult = { assetId: asset.id, symbol: asset.symbol, oiPct: null, fdvPct: null,
     oiMatched: null, fdvMatched: null, matched: false, evaluable: false, status: 'unavailable',
-    reason: '', startAt: baseline?.timestamp ?? null, endAt: latest.timestamp, baseline, latest };
+    reason: '', startAt: baseline?.timestamp ?? null, endAt: latest.timestamp, baseline, latest,
+    valuationBasis: selectValuation(latest).basis };
   const unavailable = (reason: string): ChangeResult => ({ ...result, reason: `${reason}；仅比较区间端点，不保证区间连续` });
   if (!isChangeRule(rule)) return unavailable('监控参数无效');
   const windowIssue = changeWindowIssue(asset.id, latest, baseline, rule.windowMinutes, now);
   if (windowIssue || !baseline) return unavailable(windowIssue ?? '窗口起点附近尚无已知可用观测');
 
   const oiIssue = oiChangeIssue(latest, baseline, now, rule.oiBasis);
-  const fdvIssue = priceChangeIssue(latest, baseline, now);
+  const values = valuationPair(latest, baseline);
+  const fdvIssue = priceChangeIssue(latest, baseline, now) ?? values.issue;
   const oiKey = rule.oiBasis === 'quantity' ? 'oiQuantity' : 'oiUsd';
   const oi = compareMetric(latest[oiKey], baseline[oiKey], rule.oi, oiIssue);
-  // fdvUsd is frozen only after source/supply validation. Never rebuild it from today's supply.
-  const fdv = compareMetric(latest.fdvUsd, baseline.fdvUsd, rule.fdv, fdvIssue);
+  // Both amounts were frozen after validation. Never rebuild history or compare different bases.
+  const fdv = compareMetric(values.latest.valueUsd, values.baseline.valueUsd, rule.fdv, fdvIssue);
   const enabled = [rule.oi.enabled ? oi.matched : undefined, rule.fdv.enabled ? fdv.matched : undefined]
     .filter((value): value is boolean | null => value !== undefined);
   const outcome = rule.combine === 'all'
@@ -169,5 +175,5 @@ export function analyzeChange(asset: AssetRow, latest: HistoryPoint, baseline: H
     `${label}：${value.issue ?? (condition.enabled ? value.matched ? '已命中' : '未达阈值' : '未启用')}`;
   return { ...result, oiPct: oi.pct, fdvPct: fdv.pct, oiMatched: oi.matched, fdvMatched: fdv.matched,
     matched: outcome === true, evaluable: outcome !== null, status: outcome === null ? 'unavailable' : outcome ? 'hit' : 'below',
-    reason: `${metricReason('OI', rule.oi, oi)}；${metricReason('FDV', rule.fdv, fdv)}；仅比较区间端点，不保证区间连续` };
+    reason: `${metricReason('OI', rule.oi, oi)}；${metricReason(values.latest.label, rule.fdv, fdv)}；仅比较区间端点，不保证区间连续` };
 }

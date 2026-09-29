@@ -7,6 +7,25 @@ const signal = () => new AbortController().signal;
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('rate-limit recovery uses a real deadline, not blind refresh', () => {
+  it('shares a rolling OI-history quota between metadata and backfill without starving live OI', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(1_800_000_000_000);
+    const fetcher = vi.fn(async () => Response.json({})) as unknown as typeof fetch;
+    const metadata = createSourceClient(fetcher, 4, { priority: 'background' });
+    const recovery = createSourceClient(fetcher, 1, { priority: 'background' });
+    const live = createSourceClient(fetcher, 12); live.setBinanceWeightLimit(10_000);
+    const history = 'https://fapi.binance.com/futures/data/openInterestHist?symbol=TESTUSDT&period=5m&limit=1';
+    for (let i = 0; i < 400; i++) await metadata(history, signal());
+    vi.setSystemTime(1_800_000_060_000);
+    for (let i = 0; i < 400; i++) await recovery(history, signal());
+    await expect(metadata(history, signal())).rejects.toMatchObject({ code: 'RATE_LIMIT_HISTORY_BUDGET', retryAt: 1_800_000_300_000 });
+    await live(OI, signal());
+    expect(fetcher).toHaveBeenCalledTimes(801);
+    expect(live.retryAt()).toBe(0);
+    vi.setSystemTime(1_800_000_300_000);
+    await metadata(history, signal());
+    expect(fetcher).toHaveBeenCalledTimes(802);
+  });
+
   it('exposes the first 429 deadline and never lets a later 429 shorten an existing 418 ban', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(1_800_000_000_000);
     const replies: ((response: Response) => void)[] = [];
