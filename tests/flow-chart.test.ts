@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FlowCandle, FlowEvent, FlowHistory, FlowMarket, FlowOi } from '../src/shared/flowTypes';
-import { prepareFlowChart, visibleFlowTrades } from '../src/web/FlowCharts';
+import { flowOiSeries, flowOiTooltip, prepareFlowChart, visibleFlowTrades } from '../src/web/FlowCharts';
 
 const MINUTE = 60_000;
 const start = Date.UTC(2026, 8, 23, 10);
@@ -60,6 +60,49 @@ describe('honest order-flow chart preparation', () => {
     const input = history([], { oi: [oi(240, 17), oi(30, 11), oi(210, 15), oi(245, 900, { marketKey: 'futures:OTHERUSDC' })] });
     const result = prepareFlowChart(input, 5, start, start + 10 * MINUTE - 1, start + 10 * MINUTE);
     expect(result.map(bar => bar.oi)).toEqual([17, null]);
+  });
+
+  it('keeps official five-minute history separate from live OI without filling minute gaps', () => {
+    const receivedAt = start + 12 * MINUTE;
+    const input = history([], { oi: [oi(30, 11), oi(0, 9, { source: 'rest-5m', receivedAt }), oi(300, 14, { source: 'rest-5m', receivedAt }), oi(330, 17)] });
+    const result = prepareFlowChart(input, 1, start, start + 10 * MINUTE - 1, receivedAt);
+    expect(result.map(bar => bar.oi)).toEqual([11, null, null, null, null, 17, null, null, null, null]);
+    expect(result.map(bar => bar.oiHistorical)).toEqual([9, null, null, null, null, 14, null, null, null, null]);
+    expect(result[5]).toMatchObject({ oiTime: start + 330_000, oiHistoricalTime: start + 5 * MINUTE, oiHistoricalReceivedAt: receivedAt });
+    const [live, historical] = flowOiSeries(result);
+    expect(live).toMatchObject({ type: 'line', connectNulls: false, showSymbol: false });
+    expect(historical).toMatchObject({ type: 'scatter', symbol: 'diamond', symbolSize: 6 });
+    expect(historical.data).toEqual(result.map((bar, index) => [index, bar.oiHistorical]));
+  });
+
+  it('never replaces live bucket OI with a later historical sample or connects historical gaps', () => {
+    const input = history([], { oi: [oi(30, 11), oi(240, 900, { source: 'rest-5m' }), oi(600, 0, { source: 'rest-5m' })] });
+    const result = prepareFlowChart(input, 5, start, start + 15 * MINUTE - 1, start + 15 * MINUTE);
+    expect(result.map(bar => bar.oi)).toEqual([11, null, null]);
+    expect(result.map(bar => bar.oiHistorical)).toEqual([900, null, 0]);
+    expect(flowOiSeries(result)[1].type).toBe('scatter');
+  });
+
+  it('filters later historical recovery out of event replay using its real receipt time', () => {
+    const cutoff = start + 6 * MINUTE;
+    const input = history([candle(0), candle(1, { source: 'rest', receivedAt: cutoff + 1 })], {
+      oi: [oi(30, 11), oi(0, 9, { source: 'rest-5m', receivedAt: cutoff - 1 }), oi(300, 99, { source: 'rest-5m', receivedAt: cutoff + 1 })],
+    });
+    const replay = prepareFlowChart(input, 1, start, start + 10 * MINUTE - 1, cutoff);
+    expect(replay[0]).toMatchObject({ oi: 11, oiHistorical: 9 });
+    expect(replay[1].candle).toBeNull(); expect(replay[5].oiHistorical).toBeNull();
+    const laterView = prepareFlowChart(input, 1, start, start + 10 * MINUTE - 1, cutoff + 2);
+    expect(laterView[1].candle?.source).toBe('rest'); expect(laterView[5].oiHistorical).toBe(99);
+  });
+
+  it('labels native single-contract units, sample time, five-minute precision and actual recovery time', () => {
+    const receivedAt = start + 12 * MINUTE;
+    const input = history([], { oi: [oi(30, 11), oi(0, 9, { source: 'rest-5m', receivedAt })] });
+    const bar = prepareFlowChart(input, 1, start, start + MINUTE - 1, receivedAt)[0];
+    const tooltip = flowOiTooltip(bar);
+    expect(tooltip).toContain('单合约 OI · 实测 11'); expect(tooltip).toContain('单合约 OI · 5m 历史补取 9');
+    expect(tooltip).toContain('实测时间'); expect(tooltip).toContain('源时间'); expect(tooltip).toContain('5m 精度，不插值');
+    expect(tooltip).toContain(`补取于 ${new Date(receivedAt).toLocaleString('zh-CN', { hour12: false })}`);
   });
 
   it('excludes candles and OI not available at the as-of cutoff, including late receipts', () => {

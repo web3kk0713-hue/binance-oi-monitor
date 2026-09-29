@@ -34,6 +34,14 @@ describe('bounded shared history requests', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it('does not share archive recovery with an as-known evidence replay', async () => {
+    const load = vi.fn(async () => history); const requests = createFlowHistoryRequests(load);
+    await Promise.all([requests.read('futures:BTCUSDT', 1, end),
+      requests.read('futures:BTCUSDT', 1, end, undefined, 'historical')]);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(load.mock.calls.map(call => (call as unknown[])[4])).toEqual(['as-known', 'historical']);
+  });
+
   it('cancels one consumer without aborting another consumer sharing its request', async () => {
     const pending = deferred<FlowHistory>(); let sourceSignal!: AbortSignal;
     const load = vi.fn((_key: string, _hours: number, _to: number, signal: AbortSignal) => { sourceSignal = signal; return pending.promise; });

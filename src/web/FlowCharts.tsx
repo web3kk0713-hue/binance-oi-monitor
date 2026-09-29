@@ -4,18 +4,22 @@ import { BarChart, CandlestickChart, LineChart, ScatterChart } from 'echarts/cha
 import { AriaComponent, DataZoomComponent, GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
-import type { FlowCandle, FlowEvent, FlowHistory } from '../shared/flowTypes';
+import type { FlowCandle, FlowEvent, FlowHistory, FlowOi } from '../shared/flowTypes';
 import { escapeHtml } from './format';
 
 echarts.use([BarChart, CandlestickChart, LineChart, ScatterChart, AriaComponent, DataZoomComponent, GridComponent, MarkLineComponent, TooltipComponent, CanvasRenderer]);
 
 const MINUTE = 60_000;
-const COLOR = { buy: '#16866b', sell: '#c93646', blue: '#0875e1', cvd: '#8764b7', text: '#68717d', grid: '#eef0f4' };
+const COLOR = { buy: '#16866b', sell: '#c93646', blue: '#0875e1', historicalOi: '#a4772b', cvd: '#8764b7', text: '#68717d', grid: '#eef0f4' };
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif';
 const numeric = (value: number | null | undefined, compact = false) => value == null || !Number.isFinite(value) ? '—'
   : value.toLocaleString('en-US', compact ? { notation: 'compact', maximumFractionDigits: 2 } : { maximumSignificantDigits: 8 });
 
-export interface FlowChartBar { timestamp: number; candle: FlowCandle | null; delta: number | null; cvd: number | null; oi: number | null; }
+export interface FlowChartBar {
+  timestamp: number; candle: FlowCandle | null; delta: number | null; cvd: number | null;
+  oi: number | null; oiTime: number | null;
+  oiHistorical: number | null; oiHistoricalTime: number | null; oiHistoricalReceivedAt: number | null;
+}
 
 export function visibleFlowTrades(history: FlowHistory, from: number, to: number, observedUntil: number): FlowEvent[] {
   return history.events.filter(event => event.rawTrade && event.marketKey === history.market?.key && (event.kind === 'large_buy' || event.kind === 'large_sell')
@@ -33,12 +37,14 @@ export function prepareFlowChart(history: FlowHistory, interval: 1 | 5, from: nu
     const previous = candles.get(candle.openTime);
     if (!previous || (!previous.closed && candle.closed) || previous.closed === candle.closed && candle.receivedAt >= previous.receivedAt) candles.set(candle.openTime, candle);
   }
-  const quantities = new Map<number, { timestamp: number; quantity: number }>();
+  const quantities = new Map<number, FlowOi>();
+  const historicalQuantities = new Map<number, FlowOi>();
   for (const point of history.oi) {
     if (point.marketKey !== history.market?.key || point.timestamp < from || point.timestamp > to || point.timestamp > observedUntil || point.receivedAt > observedUntil || !Number.isFinite(point.quantity)) continue;
     const bucket = Math.floor(point.timestamp / step) * step;
-    const previous = quantities.get(bucket);
-    if (!previous || point.timestamp > previous.timestamp) quantities.set(bucket, point);
+    const target = point.source === 'rest-5m' ? historicalQuantities : quantities;
+    const previous = target.get(bucket);
+    if (!previous || point.timestamp > previous.timestamp || point.timestamp === previous.timestamp && point.receivedAt > previous.receivedAt) target.set(bucket, point);
   }
   const result: FlowChartBar[] = [];
   let cumulative = 0;
@@ -60,9 +66,30 @@ export function prepareFlowChart(history: FlowHistory, interval: 1 | 5, from: nu
     }
     const delta = candle ? 2 * candle.takerBuyQuote - candle.quoteVolume : null;
     if (delta === null) cumulative = 0; else cumulative += delta;
-    result.push({ timestamp, candle, delta, cvd: delta === null ? null : cumulative, oi: quantities.get(timestamp)?.quantity ?? null });
+    const observedOi = quantities.get(timestamp), historicalOi = historicalQuantities.get(timestamp);
+    result.push({ timestamp, candle, delta, cvd: delta === null ? null : cumulative,
+      oi: observedOi?.quantity ?? null, oiTime: observedOi?.timestamp ?? null,
+      oiHistorical: historicalOi?.quantity ?? null, oiHistoricalTime: historicalOi?.timestamp ?? null,
+      oiHistoricalReceivedAt: historicalOi?.receivedAt ?? null });
   }
   return result;
+}
+
+/** Separate sources never share a line; sparse 5m history stays visible on a 1m chart. */
+export function flowOiSeries(bars: FlowChartBar[]) {
+  return [
+    { name: '单合约 OI · 实测', type: 'line' as const, xAxisIndex: 3, yAxisIndex: 3, data: bars.map(bar => bar.oi),
+      showSymbol: false, connectNulls: false, lineStyle: { color: COLOR.blue, width: 1.8 }, itemStyle: { color: COLOR.blue } },
+    { name: '单合约 OI · 5m 历史补取', type: 'scatter' as const, xAxisIndex: 3, yAxisIndex: 3,
+      data: bars.map((bar, index) => [index, bar.oiHistorical]), symbol: 'diamond', symbolSize: 6, itemStyle: { color: COLOR.historicalOi } },
+  ];
+}
+
+export function flowOiTooltip(bar: FlowChartBar): string {
+  const time = (value: number | null) => value === null ? '—' : escapeHtml(new Date(value).toLocaleString('zh-CN', { hour12: false }));
+  return `单合约 OI · 实测 ${numeric(bar.oi)}${bar.oiTime === null ? '' : `<br/>实测时间 ${time(bar.oiTime)} · 本区间末次观测`}`
+    + `<br/>单合约 OI · 5m 历史补取 ${numeric(bar.oiHistorical)}`
+    + (bar.oiHistoricalTime === null ? '' : `<br/>源时间 ${time(bar.oiHistoricalTime)} · 5m 精度，不插值<br/>补取于 ${time(bar.oiHistoricalReceivedAt)}`);
 }
 
 export interface FlowChartsProps {
@@ -104,14 +131,14 @@ export const FlowCharts = memo(function FlowCharts({ history, interval, from, to
         formatter: (value: string) => new Date(Number(value)).toLocaleString('zh-CN', to - from > 86_400_000 ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false } : { hour: '2-digit', minute: '2-digit', hour12: false }) }, splitLine: { show: false } }));
     const eventIndex = eventTime === null ? undefined : indexByTime.get(Math.floor(eventTime / (interval * MINUTE)) * interval * MINUTE);
     return {
-      animation: false, textStyle: { fontFamily: FONT }, aria: { enabled: true, label: { description: `${history.market?.symbol ?? ''} ${interval}分钟K线、大额成交事件、主动成交差Delta、区间CVD和原始OI数量；空缺不连接，CVD在缺口后重新起算。` } },
+      animation: false, textStyle: { fontFamily: FONT }, aria: { enabled: true, label: { description: `${history.market?.symbol ?? ''} ${interval}分钟K线、大额成交事件、主动成交差Delta、区间CVD和单合约OI数量；实测OI为蓝线，5m历史补取为独立菱形点；空缺不连接，CVD在缺口后重新起算。` } },
       grid: [{ left: 66, right: 20, top: 28, height: '37%' }, { left: 66, right: 20, top: '45%', height: '13%' }, { left: 66, right: 20, top: '65%', height: '11%' }, { left: 66, right: 20, top: '82%', bottom: 53 }],
       xAxis: axes,
       yAxis: [
         { type: 'value', gridIndex: 0, scale: true, name: `价格 · ${quote}`, nameGap: 12 },
         { type: 'value', gridIndex: 1, name: `Delta · ${quote}`, nameGap: 10 },
         { type: 'value', gridIndex: 2, name: `CVD · ${quote}`, nameGap: 10 },
-        { type: 'value', gridIndex: 3, name: '原始 OI 数量', nameGap: 10, scale: true },
+        { type: 'value', gridIndex: 3, name: '单合约 OI 数量', nameGap: 10, scale: true },
       ].map(axis => ({ ...axis, nameTextStyle: { color: COLOR.text, fontSize: 11, align: 'left' }, axisLabel: { color: COLOR.text, fontSize: 11, hideOverlap: true, formatter: (value: number) => numeric(value, true) }, axisLine: { show: false }, axisTick: { show: false }, splitNumber: 2, splitLine: { lineStyle: { color: COLOR.grid } } })),
       axisPointer: { link: [{ xAxisIndex: 'all' }] },
       dataZoom: [{ type: 'inside', xAxisIndex: [0, 1, 2, 3], filterMode: 'none', start: 0, end: 100 }, { type: 'slider', xAxisIndex: [0, 1, 2, 3], filterMode: 'none', bottom: 3, height: 17, left: 66, right: 20, showDetail: false, borderColor: '#e5e8ed', fillerColor: '#0875e117', dataBackground: { lineStyle: { color: '#bbc7d6' }, areaStyle: { color: '#eef2f8' } }, handleStyle: { color: '#fff', borderColor: '#bdc9d9' } }],
@@ -122,7 +149,7 @@ export const FlowCharts = memo(function FlowCharts({ history, interval, from, to
           const candle = bar.candle;
           return `<strong>${escapeHtml(new Date(bar.timestamp).toLocaleString('zh-CN', { hour12: false }))}</strong><br/>` + (candle
             ? `开 ${numeric(candle.open)}　高 ${numeric(candle.high)}<br/>低 ${numeric(candle.low)}　收 ${numeric(candle.close)} ${escapeHtml(quote)}<br/>成交额 ${numeric(candle.quoteVolume, true)} ${escapeHtml(quote)}${candle.closed ? '' : '<br/>本根未收盘'}<br/>`
-            : '该区间 K 线缺失<br/>') + `Delta ${numeric(bar.delta, true)} ${escapeHtml(quote)}<br/>CVD ${numeric(bar.cvd, true)} ${escapeHtml(quote)}<br/>OI ${numeric(bar.oi)}`;
+            : '该区间 K 线缺失<br/>') + `Delta ${numeric(bar.delta, true)} ${escapeHtml(quote)}<br/>CVD ${numeric(bar.cvd, true)} ${escapeHtml(quote)}<br/>${flowOiTooltip(bar)}`;
         },
       },
       series: [
@@ -133,7 +160,7 @@ export const FlowCharts = memo(function FlowCharts({ history, interval, from, to
         }, bubbleSeries('buy'), bubbleSeries('sell'),
         { name: 'Delta', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: bars.map(bar => ({ value: bar.delta, itemStyle: { color: (bar.delta ?? 0) >= 0 ? COLOR.buy : COLOR.sell } })), barMaxWidth: 12 },
         { name: 'CVD', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: bars.map(bar => bar.cvd), showSymbol: false, connectNulls: false, lineStyle: { color: COLOR.cvd, width: 1.6 }, itemStyle: { color: COLOR.cvd } },
-        { name: 'OI 数量', type: 'line', xAxisIndex: 3, yAxisIndex: 3, data: bars.map(bar => bar.oi), showSymbol: false, connectNulls: false, lineStyle: { color: COLOR.blue, width: 1.8 }, itemStyle: { color: COLOR.blue } },
+        ...flowOiSeries(bars),
       ],
     } as EChartsOption;
   }, [bars, history.events, history.market?.symbol, interval, from, to, observedUntil, selectedEventId, eventTime, quote]);
@@ -165,6 +192,6 @@ export const FlowCharts = memo(function FlowCharts({ history, interval, from, to
     previousKey.current = viewKey;
   }, [option, viewKey]);
 
-  const hasData = bars.some(bar => bar.candle || bar.oi !== null);
-  return <div className="flow-chart-stage"><div ref={element} className="flow-chart-canvas" role="img" aria-hidden={!hasData} aria-label={`${history.market?.symbol ?? ''} ${interval}分钟K线、成交事件、Delta、CVD、OI联动图，可拖动底部时间范围`} />{!hasData ? <div className="flow-chart-empty"><strong>这个区间还没有可用行情</strong><p>等待官方 K 线预热或选择其他市场；历史缺口不会自动补成曲线。</p></div> : null}</div>;
+  const hasData = bars.some(bar => bar.candle || bar.oi !== null || bar.oiHistorical !== null);
+  return <div className="flow-chart-stage"><div ref={element} className="flow-chart-canvas" role="img" aria-hidden={!hasData} aria-label={`${history.market?.symbol ?? ''} ${interval}分钟K线、成交事件、Delta、CVD、单合约OI联动图，可拖动底部时间范围`} />{!hasData ? <div className="flow-chart-empty"><strong>这个区间还没有可用行情</strong><p>{eventTime === null ? '可补取的 K线与 5m OI 以官方返回为准；失败或仍缺失的位置保留空白。' : '只展示回放截止时已经收到的证据；后来补取的数据不进入本次回放。'}</p></div> : null}</div>;
 });

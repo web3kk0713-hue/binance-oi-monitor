@@ -116,8 +116,14 @@ export function useMonitor(settings: Settings, onSnapshot: (snapshot: Snapshot) 
       }
     };
     refreshRef.current = () => { void run(); };
+    const resume = () => { if (document.visibilityState === 'visible') void run(); };
+    window.addEventListener('online', resume);
+    document.addEventListener('visibilitychange', resume);
     void run();
-    return () => { stopped = true; controller.abort(); if (timer) clearTimeout(timer); refreshRef.current = () => undefined; };
+    return () => {
+      stopped = true; controller.abort(); if (timer) clearTimeout(timer); refreshRef.current = () => undefined;
+      window.removeEventListener('online', resume); document.removeEventListener('visibilitychange', resume);
+    };
   }, [settings.mode, settings.backendUrl]);
   return { snapshot, progress, collecting, nextRun, retryAt, error, storageError, backend, historyVersion, shortline, refresh };
 }

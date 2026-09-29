@@ -5,27 +5,30 @@ import type { Snapshot } from '../shared/types';
 import type { Settings } from './storage';
 import { backendGet } from './useMonitor';
 import { loadFlowEvents, loadFlowHistory, mergeFlowHistory, saveFlowUpdate } from './flowStorage';
+import { createFlowBackfill } from '../data/flowBackfill';
+import { createBrowserHistoryRecovery } from './browserHistoryRecovery';
 
 export type FlowMonitor = ReturnType<typeof useFlowMonitor>;
+export type FlowHistoryMode = 'as-known' | 'historical';
 
 /** Exact-window in-flight sharing, with independent cancellation for each consumer.
  * Completed responses are not cached: late received evidence must retain its real
  * observable time and replay requests must not inherit a newer live window.
  */
-export function createFlowHistoryRequests(load: (key: string, hours: number, to: number, signal: AbortSignal) => Promise<FlowHistory>) {
+export function createFlowHistoryRequests(load: (key: string, hours: number, to: number, signal: AbortSignal, mode: FlowHistoryMode) => Promise<FlowHistory>) {
   type Entry = { controller: AbortController; promise: Promise<FlowHistory>; users: number };
   const pending = new Map<string, Entry>();
   const abortReason = (signal: AbortSignal) => signal.reason ?? new DOMException('History request aborted', 'AbortError');
   return {
-    read(key: string, hours: number, to: number, signal?: AbortSignal): Promise<FlowHistory> {
+    read(key: string, hours: number, to: number, signal?: AbortSignal, mode: FlowHistoryMode = 'as-known'): Promise<FlowHistory> {
       if (signal?.aborted) return Promise.reject(abortReason(signal));
-      const requestKey = JSON.stringify([key, hours, to]);
+      const requestKey = JSON.stringify([key, hours, to, mode]);
       let entry = pending.get(requestKey);
       if (!entry || entry.controller.signal.aborted) {
         const controller = new AbortController();
         const created: Entry = { controller, users: 0, promise: Promise.resolve().then(async () => {
           controller.signal.throwIfAborted();
-          const result = await load(key, hours, to, controller.signal);
+          const result = await load(key, hours, to, controller.signal, mode);
           controller.signal.throwIfAborted();
           return result;
         }) };
@@ -65,6 +68,11 @@ export function useFlowMonitor(settings: Settings, snapshot: Snapshot | null) {
   const [data, setData] = useState<FlowSnapshot | null>(null), [error, setError] = useState<string | null>(null);
   const feed = useRef<ReturnType<typeof createFlowFeed> | null>(null), source = useRef(snapshot);
   const selected = useRef<string | null>(null), refreshAction = useRef<() => void>(() => {});
+  const recovery = useMemo(() => {
+    const source = createFlowBackfill();
+    return createBrowserHistoryRecovery({ recover: source.recover, save: saveFlowUpdate });
+  }, [settings.mode, settings.backendUrl]);
+  useEffect(() => () => recovery.cancel(), [recovery]);
   source.current = snapshot;
   useEffect(() => {
     let disposed = false; const controller = new AbortController(); setData(null); setError(null);
@@ -101,24 +109,31 @@ export function useFlowMonitor(settings: Settings, snapshot: Snapshot | null) {
     return () => { disposed = true; controller.abort(); cleanup(); refreshAction.current = () => {}; };
   }, [settings.mode, settings.backendUrl]);
   useEffect(() => { if (snapshot) feed.current?.updateSnapshot(snapshot); }, [snapshot]);
-  const selectMarket = useCallback((key: string | null) => { selected.current = key; feed.current?.selectMarket(key); }, []);
-  const historyRequests = useMemo(() => createFlowHistoryRequests(async (key, boundedHours, to, signal) => {
+  const selectMarket = useCallback((key: string | null) => {
+    if (selected.current !== key) recovery.cancel();
+    selected.current = key; feed.current?.selectMarket(key);
+  }, [recovery]);
+  const historyRequests = useMemo(() => createFlowHistoryRequests(async (key, boundedHours, to, signal, mode) => {
     signal.throwIfAborted();
     const from = to - boundedHours * 3_600_000;
     if (settings.mode === 'server') return backendGet<FlowHistory>(settings.backendUrl, `/api/v1/flow/history?marketKey=${encodeURIComponent(key)}&hours=${boundedHours}&to=${to}`, signal);
     const live = feed.current?.history(key, from, to) ?? { market: null, from, to, candles: [], events: [], depth: [], oi: [] };
     try {
       const stored = await loadFlowHistory(key, from, to); signal.throwIfAborted();
-      return mergeFlowHistory(stored, live);
+      const merged = mergeFlowHistory(stored, live);
+      // Ordinary chart views may fetch past market facts now. Event replay remains read-only,
+      // and both paths keep the archive's receivedAt <= to information cutoff.
+      return mode === 'historical' && merged.market
+        ? { ...merged, recovery: recovery.ensure(merged.market, merged, from, to) } : merged;
     } catch (error) {
       if (signal.aborted) throw error;
       setError('浏览器历史读取失败，仅显示当前进程缓存'); return live;
     }
-  }), [settings.mode, settings.backendUrl]);
+  }), [settings.mode, settings.backendUrl, recovery]);
   useEffect(() => () => historyRequests.cancelAll(), [historyRequests]);
-  const history = useCallback((key: string, hours: number, to = Date.now(), signal?: AbortSignal): Promise<FlowHistory> => {
+  const history = useCallback((key: string, hours: number, to = Date.now(), signal?: AbortSignal, mode: FlowHistoryMode = 'as-known'): Promise<FlowHistory> => {
     if (!Number.isFinite(hours) || !Number.isFinite(to) || to <= 0) return Promise.reject(new Error('历史请求时间范围无效'));
-    return historyRequests.read(key, Math.max(1 / 60, Math.min(168, hours)), Math.floor(to), signal);
+    return historyRequests.read(key, Math.max(1 / 60, Math.min(168, hours)), Math.floor(to), signal, mode);
   }, [historyRequests]);
   return { data, error, selectMarket, history, refresh: useCallback(() => refreshAction.current(), []) };
 }

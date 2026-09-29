@@ -25,6 +25,8 @@
 
 ## 已锁定接口（增量兼容）
 
+2026-09-29 最新用户选择：仅用 GitHub 网页直连，不配置 Render 或本机后台；恢复联网/重开后补拉接口可提供的历史。保留 30 秒实时采集目标；异常监控普通行情图按所看标的与区间补取最多 7 天官方 1m K线 / 单合约 5m OI，不将其伪装成 30 秒实测、资产聚合 OI 或历史 FDV。未来不可用数据隔离和通知边界不变，详见 `browser-history-recovery.md`。
+
 共同TypeScript合同为 src/shared/types.ts。所有时间epoch ms，比例为百分比(72=72%)，金额为USD。
 
 - createCollector(options).collect({signal,onProgress}) -> Snapshot，模块 src/data/collector.ts；浏览器和后台共用。

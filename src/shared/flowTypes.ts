@@ -16,7 +16,11 @@ export interface FlowQuote {
   marketKey: string; markPrice: number; indexPrice: number; fundingRate: number | null;
   nextFundingTime: number | null; fundingIntervalHours: number | null; timestamp: number; receivedAt: number;
 }
-export interface FlowOi { marketKey: string; quantity: number; timestamp: number; receivedAt: number; }
+export interface FlowOi {
+  marketKey: string; quantity: number; timestamp: number; receivedAt: number;
+  /** Official five-minute historical statistics. Display only; never feed live signal evaluation. */
+  source?: 'rest-5m';
+}
 export interface FlowDepth {
   marketKey: string; timestamp: number; receivedAt: number; bid: number; ask: number;
   bidDepthQuote: number; askDepthQuote: number; bandBps: number; spreadBps: number;
@@ -51,7 +55,10 @@ export interface FlowSnapshot {
   /** Independent raw mark-price observations, never inferred from trades or gated by funding metadata. */
   marks?: MarkObservation[];
 }
-export interface FlowHistory { market: FlowMarket | null; candles: FlowCandle[]; events: FlowEvent[]; depth: FlowDepth[]; oi: FlowOi[]; from: number; to: number; }
+export interface FlowHistory {
+  market: FlowMarket | null; candles: FlowCandle[]; events: FlowEvent[]; depth: FlowDepth[]; oi: FlowOi[]; from: number; to: number;
+  recovery?: { pending: boolean; missingCandles: number; missingOi: number; message: string | null };
+}
 export interface FlowUpdate { candles: FlowCandle[]; events: FlowEvent[]; depth: FlowDepth[]; oi: FlowOi[]; }
 export interface FlowFeedOptions {
   mode: 'direct' | 'server'; onUpdate?: (update: FlowUpdate) => void | Promise<void>;

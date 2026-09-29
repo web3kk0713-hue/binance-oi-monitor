@@ -92,6 +92,21 @@ export function EventEvidence({ event, now, onExport }: { event: FlowEvent; now:
   </section>;
 }
 
+export function FlowHistoryRecovery({ recovery, loading, isReplay, isSpot = false }: {
+  recovery: FlowHistory['recovery']; loading: boolean; isReplay: boolean; isSpot?: boolean;
+}) {
+  if (isReplay) return null;
+  const pending = recovery?.pending ?? loading;
+  const missing = Boolean(recovery && (recovery.missingCandles > 0 || recovery.missingOi > 0));
+  const label = pending ? '历史补取中' : recovery?.message ? '历史补取未完成' : missing ? '历史仍有缺口' : recovery ? '当前区间已补齐' : '等待历史检查';
+  return <div className="flow-coverage-note" role="status" aria-live="polite"><strong>{label}</strong>
+    {missing ? <> · 缺 {recovery!.missingCandles.toLocaleString()} 根 K线{isSpot ? '' : ` / ${recovery!.missingOi.toLocaleString()} 个 OI 点`}</> : null}
+    {recovery?.message ? <> · {recovery.message}</> : null}
+    <span> · K线 1m{isSpot ? ' · 现货无 OI' : ' / 单合约 OI 5m'}<MetricHelp label="历史补取范围">仅按当前标的与所看区间补取，最多 7 天。K线来自官方 1m 数据，单合约 OI 来自官方 5m 历史统计，保留实际补取时间，不插值或补造 30 秒观测；不参与实时报警。FDV、大额成交事件、历史盘口与个人持仓提醒不能据此恢复。旧事件回放仍只展示当时已经收到的证据。</MetricHelp></span>
+    <span> · 不补 FDV、事件、盘口或持仓提醒</span>
+  </div>;
+}
+
 function FlowDashboard({ settings, snapshot, active, historyVersion, onOpenSettings }: { settings: Settings; snapshot: Snapshot | null; active: boolean; historyVersion: number; onOpenSettings: () => void }) {
   const monitor = useSharedFlowMonitor();
   const { config: directionConfig } = useDirectionSettings();
@@ -109,7 +124,7 @@ function FlowDashboard({ settings, snapshot, active, historyVersion, onOpenSetti
   const [interval, setIntervalSize] = useState<1 | 5>(1);
   const [range, setRange] = useState<FlowRange>('1h');
   const [mobilePane, setMobilePane] = useState<'events' | 'chart'>('events');
-  const [historyRecord, setHistoryRecord] = useState<{ key: string; data: FlowHistory } | null>(null);
+  const [historyRecord, setHistoryRecord] = useState<{ key: string; range: FlowRange; data: FlowHistory } | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [requestVersion, setRequestVersion] = useState(0);
@@ -216,10 +231,10 @@ function FlowDashboard({ settings, snapshot, active, historyVersion, onOpenSetti
     const to = event ? Math.min(Date.now(), event.timestamp + 15 * 60_000) : undefined;
     const hours = range === 'event' ? .5 : RANGE_HOURS[range];
     setHistoryLoading(true); setHistoryError(null);
-    void historyFn.current(marketKey, hours, to, controller.signal).then(result => {
+    void historyFn.current(marketKey, hours, to, controller.signal, event ? 'as-known' : 'historical').then(result => {
       if (stopped) return;
       if (result.market && result.market.key !== marketKey) throw new Error('历史返回了不一致的交易对，已停止展示。');
-      setHistoryRecord({ key: marketKey, data: result });
+      setHistoryRecord({ key: marketKey, range, data: result });
     }).catch((reason: unknown) => { if (!stopped && !controller.signal.aborted) setHistoryError(reason instanceof Error ? reason.message : '历史读取失败'); })
       .finally(() => { if (!stopped) setHistoryLoading(false); });
     return () => { stopped = true; controller.abort(); };
@@ -229,7 +244,7 @@ function FlowDashboard({ settings, snapshot, active, historyVersion, onOpenSetti
     if (!event && !data) return;
     const payload = { schemaVersion: 1, exportedAt: new Date().toISOString(), market: chosen?.market ?? data?.market, event,
       range: { from: chartFrom, to: Math.min(chartTo, now), intervalMinutes: interval },
-      definitions: { currency: 'native quote currency; not USD', delta: '2 * takerBuyQuote - quoteVolume', cvd: 'sum of candle delta in each continuous displayed segment; resets after gaps', oi: 'last actually observed raw quantity in each displayed candle interval', bubbles: 'recorded large-trade events only; not a complete trade tape' },
+      definitions: { currency: 'native quote currency; not USD', delta: '2 * takerBuyQuote - quoteVolume', cvd: 'sum of candle delta in each continuous displayed segment; resets after gaps', oi: 'single-contract native quantity: last live observation per displayed bucket; official rest-5m history shown separately without interpolation', bubbles: 'recorded large-trade events only; not a complete trade tape' },
       history: data, currentMetrics: chosen ?? null,
       currentDirection: { description: 'Current fixed 5m assessment, NOT a recommendation known at the historical event time',
         assessment: assessDirection(monitor.data, chosen?.market.assetId, Date.now(), marketKey, directionConfig) },
@@ -282,13 +297,20 @@ function FlowDashboard({ settings, snapshot, active, historyVersion, onOpenSetti
         <div className="flow-chart-controls"><div className="flow-timeframe" aria-label="K线周期">{([1, 5] as const).map(minutes => <button key={minutes} className={interval === minutes ? 'selected' : ''} aria-pressed={interval === minutes} onClick={() => setIntervalSize(minutes)}>{minutes}m</button>)}</div><div className="flow-range" aria-label="证据时间范围">{isReplay ? <button className={range === 'event' ? 'selected' : ''} onClick={() => setRange('event')}>事件 ±15m</button> : null}{(['1h', '24h', '7d'] as const).map(item => <button key={item} className={range === item ? 'selected' : ''} aria-pressed={range === item} onClick={() => setRange(item)}>{item === '7d' ? '7 天' : item}</button>)}</div><span>{historyLoading ? '读取证据…' : isReplay ? '固定事件回放' : '随市场更新'}</span><button className="icon-button" aria-label="重新读取事件历史" onClick={() => setRequestVersion(version => version + 1)}><Icon name="refresh" size={15}/></button></div>
         {isReplay ? <><div className="flow-replay-banner"><span><Icon name="chart" size={15}/>{event.title}</span><strong>{dateTime(event.timestamp)}</strong><button onClick={() => { setSelectedEvent(null); setRange('1h'); }}>退出回放<Icon name="close" size={13}/></button></div><div className="flow-trigger-summary"><p><strong>触发</strong>{event.reason}</p><p><strong>失效</strong>{event.invalidation}</p></div></> : <div className="flow-readiness-summary"><span>放量基准 <strong>{chosen?.baselineWindows ?? 0}</strong> 个 5m 窗口<MetricHelp label="放量基准">仅使用当前窗口之前、UTC 对齐且不重叠的完整 5m 窗口。取最多 {FLOW_RULES.baselineMax} 个的成交额中位数，至少 {FLOW_RULES.baselineMin} 个才计算放量倍数。</MetricHelp></span><span>大额样本 <strong>{chosen?.tradeSamples ?? 0}</strong><MetricHelp label="大额成交样本">用于估计动态门槛的近期真实聚合成交样本。样本不足或连接刚恢复时等待预热，不用零或演示成交替代。</MetricHelp></span><span>动态门槛 <strong>{number(chosen?.largeTradeThreshold, true)}</strong> {quote}<MetricHelp label="大额成交动态门槛">取近 1 小时有效样本第 {FLOW_RULES.largeQuantile * 100} 百分位与 {FLOW_RULES.largeMinimumQuote.toLocaleString()} 报价币的较大值。至少 {FLOW_RULES.sampleMin} 个样本并连续预热 5 分钟才启用；是筛选线，不代表巨鲸身份。</MetricHelp></span></div>}
         {!depth ? <div className="flow-coverage-note">盘口：{chosen?.depth?.reason ?? '当前市场尚无有效深度'} · {settings.mode === 'direct' ? '深度与现货仅覆盖已核实的所选交易对，不是全市场覆盖。' : '后台仅采集其已配置的深度与现货市场；切换标的不自动扩大覆盖。'}</div> : null}
-        <div className="flow-chart-legend"><span><i className="buy"/>主动买<MetricHelp label="主动买 / 主动卖">主动买是买方主动吃掉卖单，主动卖反之；每笔成交都有买卖双方，分类只描述谁主动，不区分开仓还是平仓。</MetricHelp></span><span><i className="sell"/>主动卖</span><span><i className="cvd"/>CVD<MetricHelp label="CVD">连续区间内每根 K 线的净主动成交（买额−卖额）累计，向上表示该区间主动买额更大。每段从零开始，遇到数据缺口重置；不是账户资金流入。</MetricHelp></span><span><i className="oi"/>OI 数量<MetricHelp label="OI 曲线">所选合约每根 K 线区间取最后一次实际观测的未平仓数量；不是分钟成交量，也不对没有采集到的 OI 补造数据。</MetricHelp></span><small>气泡仅为已记录大额成交；淡色 K 线未收盘<MetricHelp label="大额成交气泡">只显示系统实际记录、超过动态门槛的成交事件，不是完整逐笔成交。大额主动卖不能直接证明项目方出货或同一人持续卖出。</MetricHelp></small></div>
+        <div className="flow-chart-legend">
+          <span><i className="buy"/>主动买<MetricHelp label="主动买 / 主动卖">主动买是买方主动吃掉卖单，主动卖反之；每笔成交都有买卖双方，分类只描述谁主动，不区分开仓还是平仓。</MetricHelp></span><span><i className="sell"/>主动卖</span>
+          <span><i className="cvd"/>CVD<MetricHelp label="CVD">连续区间内每根 K 线的净主动成交（买额−卖额）累计，向上表示该区间主动买额更大。每段从零开始，遇到数据缺口重置；不是账户资金流入。</MetricHelp></span>
+          <span><i className="oi"/>OI 实测<MetricHelp label="OI 曲线">单合约原始未平仓数量，不是资产聚合 OI 或分钟成交量。蓝线每根 K线区间取最后一次实测；菱形点是官方 5m 历史补取，独立展示、不插值、不补造 30 秒点，不参与实时报警。两类数据不连成同一条线；回放按真实接收时间过滤。</MetricHelp></span>
+          <span><i className="oi" style={{ width: 6, height: 6, background: '#a4772b', transform: 'rotate(45deg)' }}/>OI 5m 补取</span>
+          <small>气泡仅为已记录大额成交；淡色 K 线未收盘<MetricHelp label="大额成交气泡">只显示系统实际记录、超过动态门槛的成交事件，不是完整逐笔成交。大额主动卖不能直接证明项目方出货或同一人持续卖出；断线期间事件不会通过历史补取重建。</MetricHelp></small>
+        </div>
+        {settings.mode === 'direct' ? <FlowHistoryRecovery recovery={historyRecord?.range === range ? data?.recovery : undefined} loading={historyLoading} isReplay={isReplay} isSpot={chosen?.market.venue === 'spot'}/> : null}
         {historyError ? <div className="flow-history-error" role="alert"><Icon name="warning" size={17}/><span>{historyError}</span><button onClick={() => setRequestVersion(version => version + 1)}>重试</button></div> : null}
         {data ? <Suspense fallback={<div className="flow-chart-placeholder">加载联动图表…</div>}><FlowCharts history={data} interval={interval} from={chartFrom} to={chartTo} observedUntil={observedUntil} selectedEventId={event?.id ?? null} eventTime={event?.timestamp ?? null} onSelectEvent={chooseEvent}/></Suspense> : <div className="flow-chart-placeholder"><Icon name="chart" size={29}/><strong>{historyError ? '暂未取得历史证据' : historyLoading ? '正在读取源头历史' : '等待市场行情'}</strong><p>取得真实 K 线后显示。缺失数据不替换为演示曲线。</p></div>}
-        <div className="flow-chart-notes"><span>{dateTime(chartFrom)} — {dateTime(Math.min(chartTo, now))}</span><span>CVD 从连续区间归零，缺口后重置；OI 每根取最后实测。金额单位均为 {quote}。</span></div>
-        <div className="flow-coverage-note">区间已取得 {coveredMinutes.toLocaleString()} / {expectedMinutes.toLocaleString()} 根闭合 1m K线{coveredMinutes < expectedMinutes ? ' · 历史不足或存在缺口，不补造曲线' : ''}。OI 与事件从实际观测开始积累。</div>
+        <div className="flow-chart-notes"><span>{dateTime(chartFrom)} — {dateTime(Math.min(chartTo, now))}</span><span>CVD 缺口后归零；OI 实测蓝线 / 5m 补取菱形点。金额单位为 {quote}。</span></div>
+        <div className="flow-coverage-note">区间已取得 {coveredMinutes.toLocaleString()} / {expectedMinutes.toLocaleString()} 根闭合 1m K线{coveredMinutes < expectedMinutes ? ' · 仍有缺口的位置保留空白' : ''}。{isReplay ? '仅含回放截止时已收到的证据。' : 'OI 补取保留 5m 精度；大额成交与盘口事件不补建。'}</div>
         {event ? <EventEvidence event={event} now={now} onExport={exportEvidence}/> : <details className="flow-rule-evidence"><summary>规则口径与原始证据</summary><div><h3>当前规则上下文</h3><button className="button text-button" disabled={!data} onClick={exportEvidence}><Icon name="download" size={15}/>导出当前证据</button></div><p>主动成交差 Delta = 主动买入额 − 主动卖出额；CVD 为连续区间 Delta 累计。数值描述成交，不代表开多或开空。</p><dl><div><dt>放量基准</dt><dd>{chosen?.baselineWindows ?? 0} 个完整 5m 窗口</dd></div><div><dt>大额成交样本</dt><dd>{chosen?.tradeSamples ?? 0} 条近期观测</dd></div><div><dt>当前大额门槛</dt><dd>{number(chosen?.largeTradeThreshold, true)} {quote}</dd></div><div><dt>公开深度<MetricHelp label="公开盘口深度">统计当前中间价附近指定基点范围内的买卖挂单名义金额。1 bp = 0.01%；挂单可能撤销，范围内深度不保证真实成交量或最终滑点。</MetricHelp></dt><dd>{depth ? `±${number(depth.bandBps)} bp：买 ${number(depth.bidDepthQuote, true)} / 卖 ${number(depth.askDepthQuote, true)} ${quote}` : chosen?.depth?.reason ?? '未取得当前市场有效盘口'}</dd></div></dl></details>}
-        <details className="flow-source-details"><summary>数据范围与接口来源 <Icon name="chevron" size={13}/></summary><p>{status?.scope ?? '仅展示已核实交易对；现货映射与公开深度覆盖不等于全市场覆盖。'}</p><p>历史最多保留 7 天，实际覆盖取决于已采集时长与存储。未采集、断流和无法核实的数据保留空缺。事件规则未经收益验证。</p><a href="https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market" target="_blank" rel="noreferrer">Binance 官方合约行情流 <Icon name="external" size={12}/></a><a href="https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams" target="_blank" rel="noreferrer">Binance 官方现货行情流 <Icon name="external" size={12}/></a>{status?.errors.length ? <ul>{status.errors.map((error, index) => <li key={index}>{error}</li>)}</ul> : null}</details>
+        <details className="flow-source-details"><summary>数据范围与接口来源 <Icon name="chevron" size={13}/></summary><p>{status?.scope ?? '仅展示已核实交易对；现货映射与公开深度覆盖不等于全市场覆盖。'}</p><p>历史最多保留 7 天。浏览器按所看标的与区间补取官方 1m K线和单合约 5m OI，实际覆盖取决于接口返回与本机存储。FDV、未记录的大额成交事件、历史盘口和持仓提醒不补建；无法核实的数据保留空缺。事件规则未经收益验证。</p><a href="https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market" target="_blank" rel="noreferrer">Binance 官方合约行情流 <Icon name="external" size={12}/></a><a href="https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams" target="_blank" rel="noreferrer">Binance 官方现货行情流 <Icon name="external" size={12}/></a>{status?.errors.length ? <ul>{status.errors.map((error, index) => <li key={index}>{error}</li>)}</ul> : null}</details>
       </section>
     </div>
     <div className="flow-bottom-status"><span>{status?.scope ?? '等待官方市场清单与连接状态'}</span><span>交易对报价币分别统计，USDT / USDC 不混加为 USD。</span></div>

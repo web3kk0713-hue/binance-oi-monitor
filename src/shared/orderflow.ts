@@ -387,7 +387,7 @@ export function createFlowEngine() {
     },
     ingestOi(input: FlowOi) {
       const state = states.get(input.marketKey);
-      if (!state || state.market.venue !== 'futures' || !nonnegative(input.quantity) || !knownAt(input.timestamp, input.receivedAt, input.receivedAt)
+      if (input.source === 'rest-5m' || !state || state.market.venue !== 'futures' || !nonnegative(input.quantity) || !knownAt(input.timestamp, input.receivedAt, input.receivedAt)
         || state.oi.has(input.timestamp)) return false;
       if (!canQueueEvidence(state, updates.oi, observationKey(input))) return false;
       const row = { ...input }; state.oi.set(row.timestamp, row); updates.oi.set(observationKey(row), row);
